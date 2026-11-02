@@ -75,6 +75,19 @@ jobs:
           tool: cargo-audit, cargo-deny
       - run: cargo audit
       - run: cargo deny check
+      - name: Flatpak cargo sources cover Cargo.lock
+        run: |
+          python3 - <<'PY'
+          import json, sys, tomllib
+          lock = tomllib.load(open("Cargo.lock", "rb"))
+          want = {f"cargo/vendor/{p['name']}-{p['version']}": p["checksum"]
+                  for p in lock["package"] if p.get("source", "").startswith("registry+")}
+          have = {s["dest"]: s["sha256"] for s in json.load(open("packaging/flatpak/cargo-sources.json"))
+                  if s["type"] == "archive"}
+          bad = sorted(d for d, c in want.items() if have.get(d) != c)
+          if bad:
+              sys.exit("packaging/flatpak/cargo-sources.json is stale; regenerate it. Missing or wrong: " + ", ".join(bad))
+          PY
 
   newer-libmpv:
     name: playback (Arch, libmpv >= 0.41)

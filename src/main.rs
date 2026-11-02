@@ -40,7 +40,9 @@ fn main() -> Result<()> {
             .with_inner_size([1100.0, 680.0])
             .with_min_inner_size([480.0, 320.0])
             .with_title("Lumen")
-            .with_app_id("lumen-rs")
+            // Wayland matches the window to its desktop file by app ID; inside the Flatpak that
+            // file is named after the Flatpak ID.
+            .with_app_id(std::env::var("FLATPAK_ID").unwrap_or_else(|_| "lumen-rs".to_owned()))
             // On GNOME Wayland the header bar is the title bar; see ui::window.
             .with_decorations(!lumen_rs::ui::window::client_side_decorations())
             .with_icon(eframe::icon_data::from_png_bytes(include_bytes!(

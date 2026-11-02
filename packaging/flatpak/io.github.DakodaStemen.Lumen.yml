@@ -1,7 +1,7 @@
 # Flatpak manifest. Build locally with:
 #   flatpak-builder --user --install --force-clean build packaging/flatpak/io.github.DakodaStemen.Lumen.yml
 # cargo-sources.json is generated: python flatpak-cargo-generator.py Cargo.lock -o packaging/flatpak/cargo-sources.json
-# (regenerate whenever Cargo.lock changes). ffmpeg/mpv are built from source (reduced feature set).
+# (regenerate whenever Cargo.lock changes; CI checks that every locked crate is listed). ffmpeg/mpv are built from source (reduced feature set).
 app-id: io.github.DakodaStemen.Lumen
 runtime: org.freedesktop.Platform
 runtime-version: '24.08'
@@ -21,6 +21,7 @@ finish-args:
   - --socket=wayland
   - --socket=pulseaudio
   - --device=dri
+  - --own-name=org.mpris.MediaPlayer2.lumen_rs
   - --filesystem=xdg-videos:ro
   - --filesystem=xdg-music:ro
   - --filesystem=xdg-pictures
@@ -52,6 +53,7 @@ modules:
       - type: git
         url: https://github.com/FFmpeg/FFmpeg.git
         tag: n7.1.1
+        commit: db69d06eeeab4f46da15030a80d539efb4503ca8
   - name: libplacebo
     buildsystem: meson
     config-opts: [-Dvulkan=disabled, -Dopengl=enabled, -Dd3d11=disabled, -Ddemos=false, -Dtests=false, -Dlcms=disabled, -Dshaderc=disabled, -Dglslang=disabled]
@@ -60,12 +62,14 @@ modules:
       - type: git
         url: https://code.videolan.org/videolan/libplacebo.git
         tag: v7.349.0
+        commit: 1fd3c7bde7b943fe8985c893310b5269a09b46c5
   - name: libXpresent
     buildsystem: autotools
     sources:
       - type: git
         url: https://gitlab.freedesktop.org/xorg/lib/libxpresent.git
         tag: libXpresent-1.0.2
+        commit: 4d92149372461bf575e8a09b1064a2884c38c3aa
   - name: mpv
     buildsystem: meson
     config-opts: [-Dlibmpv=true, -Dcplayer=false, -Dlua=disabled, -Dmanpage-build=disabled, -Dbuild-date=false, -Dalsa=disabled, -Dpulse=enabled, -Dx11=enabled, -Dwayland=enabled, -Dgl=enabled]
@@ -74,6 +78,7 @@ modules:
       - type: git
         url: https://github.com/mpv-player/mpv.git
         tag: v0.40.0
+        commit: e48ac7ce08462f5e33af6ef9deeac6fa87eef01e
   - name: lumen
     buildsystem: simple
     build-options:
@@ -85,7 +90,7 @@ modules:
       - install -Dm644 packaging/linux/lumen-rs.desktop /app/share/applications/io.github.DakodaStemen.Lumen.desktop
       - install -Dm644 packaging/linux/lumen-rs.metainfo.xml /app/share/metainfo/io.github.DakodaStemen.Lumen.metainfo.xml
       - install -Dm644 assets/icon.png /app/share/icons/hicolor/256x256/apps/io.github.DakodaStemen.Lumen.png
-      - desktop-file-edit --set-icon=io.github.DakodaStemen.Lumen /app/share/applications/io.github.DakodaStemen.Lumen.desktop || sed -i "s/^Icon=.*/Icon=io.github.DakodaStemen.Lumen/" /app/share/applications/io.github.DakodaStemen.Lumen.desktop
+      - desktop-file-edit --set-icon=io.github.DakodaStemen.Lumen --set-key=StartupWMClass --set-value=io.github.DakodaStemen.Lumen /app/share/applications/io.github.DakodaStemen.Lumen.desktop || sed -i -e "s/^Icon=.*/Icon=io.github.DakodaStemen.Lumen/" -e "s/^StartupWMClass=.*/StartupWMClass=io.github.DakodaStemen.Lumen/" /app/share/applications/io.github.DakodaStemen.Lumen.desktop
     sources:
       - type: dir
         path: ../..
