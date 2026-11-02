@@ -114,6 +114,8 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&glow::Context>) {
         self.frontend.session.stop();
         self.frontend.session.store.save_settings();
+        // Saves run on a writer thread; they must land before the process ends.
+        self.frontend.session.store.flush();
         // The render context must be freed while eframe's GL context is still current.
         self.video.lock().unwrap().take();
     }
