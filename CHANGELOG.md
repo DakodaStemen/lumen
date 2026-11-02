@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- Fixes from an audit of the whole repository:
+  - Queue: removing a row from its context menu no longer leaves the selection on the wrong row.
+    A file that will not open is skipped for the next one (it stops when every entry has failed,
+    even with repeat on). Playlists starting with a byte-order mark no longer gain a bogus first
+    entry, and a downloaded HLS `.m3u8` is queued as one item instead of one per segment.
+  - Profile: saves run on a background thread and collapse during a volume drag. Two Lumen
+    windows no longer erase each other's resume points and bookmarks (entries are merged, under a
+    file lock on Unix). A bad entry in `files.json` or a bad value in `settings.json` drops only
+    that entry or value, and a file that cannot be read at all is kept as `*.broken`.
+  - Streams: a helper started just as its job was cancelled is now stopped. Helpers end with Lumen
+    on Linux even after a crash. Streamlink runs with `--no-config` when it supports it. Secrets in
+    `srt://`, `ftp://`, `smb://` and other links are left out of the recent list.
+  - Interface: the window redraws once a second when nothing is playing, instead of five times.
+    Only visible queue rows are laid out. The seek and volume bars have names and values for
+    screen readers and work with the arrow keys, Page Up/Down, Home and End. Menu check marks,
+    the playing and selected queue rows and on-screen messages reach screen readers. Dimmed text
+    and text on the accent colour meet WCAG AA (4.5:1) in both themes and with any desktop accent.
+  - Keyboard: switching Preferences tabs cancels a waiting key capture. The link dialog no longer
+    holds focus on every frame, so Tab reaches its buttons. The Enter that opens the dialog no
+    longer submits it. A focused button or row keeps Space and Enter, but other shortcuts still
+    work. Delete does nothing while a dialog is open. `Ctrl++` can be bound.
+  - Files whose names are not valid UTF-8 are reported instead of failing to open silently.
+  - Multiple shaders work on Windows. Absurd SponsorBlock times can no longer overflow.
+  - Packaging: the Flatpak's crate list was out of date (39 crates missing); it was regenerated,
+    and CI now checks it. The Flatpak's git sources are pinned to commits, its window matches its
+    desktop file on Wayland, and MPRIS works in the sandbox. The release workflow tests before
+    packaging, pins every action to a commit and publishes SHA-256 sums. The metainfo release date
+    is corrected.
+
 - A minimal look that follows the desktop: light or dark and the accent colour from the
   freedesktop portal (with `gsettings` as a fallback, and live changes), the system interface and
   monospace fonts through fontconfig, and libadwaita-like colours. Flat buttons, no gradients or

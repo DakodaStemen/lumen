@@ -33,7 +33,9 @@ materials for LGPL components. Upstream links alone are not a complete source
 offer. The workflows do not currently capture all these materials; this is an
 explicit release-maintainer gate, not a claim that existing bundles comply.
 
-Everything is built by `.github/workflows/release.yml` (manual run, or a `v*` tag). Local builds:
+Everything is built by `.github/workflows/release.yml` (manual run, or a `v*` tag). The Linux job runs the
+tests first, and a final job publishes `SHA256SUMS` for every artifact. Nothing is attached to a
+GitHub Release automatically; that stays a manual step. Local builds:
 
 ```sh
 cargo install cargo-packager --locked
@@ -45,8 +47,8 @@ flatpak-builder --user --install --force-clean build packaging/flatpak/io.github
 ## Not done / needs credentials
 
 * **Windows signing**: needs an Authenticode certificate (OV/EV or Azure Trusted Signing). Installers are unsigned, so SmartScreen will warn.
-* **macOS signing and notarization**: needs an Apple Developer ID certificate and notarytool credentials. Unsigned dmgs need right-click, Open. Only the runner's architecture (arm64) is built.
-* **Flatpak**: the manifest is a draft; the mpv dependency modules (ffmpeg, libplacebo, libass) are not filled in, and Flathub needs vendored cargo sources.
-* **MPRIS / media keys / OS media controls**: Lumen never had these, so nothing was ported. They would be a new feature (`souvlaki` covers MPRIS, Windows SMTC and macOS Now Playing).
+* **macOS signing and notarization**: needs an Apple Developer ID certificate and notarytool credentials. Unsigned dmgs need right-click, Open. Separate arm64 and x86_64 dmgs are built; there is no universal binary.
+* **Flatpak**: the manifest builds libass, FFmpeg, libplacebo, libXpresent and mpv from source, with git sources pinned to commits, and vendors the crates through `cargo-sources.json` (CI fails when that file falls behind `Cargo.lock`). It has not been submitted to Flathub. Streamlink and yt-dlp are not included, so Twitch and YouTube page links only play directly inside the Flatpak.
+* **MPRIS / media keys**: implemented through `souvlaki` (`src/media_keys.rs`). The Flatpak owns `org.mpris.MediaPlayer2.lumen_rs`. Windows SMTC and macOS Now Playing go through the same crate but are untested.
 * **macOS "open with"**: Finder delivers files through Apple events, not argv, so opening a file from Finder starts Lumen without loading it. Drag-and-drop onto the window works.
 * The streams integration tests use POSIX shell scripts as fake tools and run on Unix only.

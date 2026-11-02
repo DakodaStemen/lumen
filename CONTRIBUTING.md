@@ -21,5 +21,5 @@ claim feature parity or performance improvements from language choice alone.
 
 Keep mpv calls in `engine.rs`, player behaviour in `session.rs`, queue ordering in
 `queue.rs`, persistence in `store.rs`, key bindings in `keys.rs`, GL rendering in
-`video.rs`, and layout in `app.rs`. New behaviour belongs in `Session` with a test in
+`video.rs`, and layout and widgets in `src/ui/`. New behaviour belongs in `Session` with a test in
 `tests/playback.rs`, not in the window code.
