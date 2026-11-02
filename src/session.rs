@@ -72,6 +72,9 @@ pub struct Session {
     flash: Option<(String, Instant)>,
     /// Why the current entry could not be played, while that is the case.
     error: Option<String>,
+    /// Entries skipped in a row because they would not open; stops a queue of broken entries
+    /// (with repeat on) from cycling forever.
+    skipped_in_row: usize,
 }
 
 impl Session {
@@ -95,6 +98,7 @@ impl Session {
             last_save: Instant::now(),
             flash: None,
             error: None,
+            skipped_in_row: 0,
         }
     }
 
@@ -286,11 +290,15 @@ impl Session {
     pub fn tick(&mut self) {
         self.handle_stream_events();
         match self.engine.poll_file_event() {
-            Some(FileEvent::Loaded) => self.file_loaded = true,
+            Some(FileEvent::Loaded) => {
+                self.file_loaded = true;
+                self.skipped_in_row = 0;
+            }
             Some(FileEvent::Changed) => self.file_loaded = false,
             Some(FileEvent::Failed) => {
                 self.file_loaded = false;
                 self.error = self.source().map(|s| failure_message(&s).to_owned());
+                self.skip_failed();
             }
             None => {}
         }
@@ -312,10 +320,31 @@ impl Session {
                 }
             }
         }
-        if state == State::Ended && !self.finished {
+        // Until mpv reports the new file loaded it may still say the previous one ended.
+        if state == State::Ended && !self.finished && self.file_loaded {
             self.finished = true;
             self.save_position(true);
             self.advance(1);
+        }
+    }
+
+    /// Moves past an entry that would not open, so one broken file does not stop the queue. The
+    /// last entry (or every entry failing in turn) leaves the error showing instead.
+    fn skip_failed(&mut self) {
+        let Some(current) = self.queue.current else {
+            return;
+        };
+        if self.skipped_in_row + 1 >= self.queue.items.len() {
+            return;
+        }
+        let failed = self.source().map(|s| crate::queue::title_of(&s));
+        self.finished = true; // nothing was played, so there is no position to save
+        self.advance(1);
+        if self.queue.current != Some(current) {
+            self.skipped_in_row += 1;
+            if let Some(name) = failed {
+                self.flash(&format!("Skipped {name}: it could not be opened."));
+            }
         }
     }
 
@@ -416,7 +445,7 @@ impl Session {
     // ----- sound -----
 
     pub fn set_volume(&mut self, volume: u32) {
-        let volume = volume.min(200);
+        let volume = volume.min(crate::store::MAX_VOLUME);
         self.engine.set_volume(volume);
         if self.store.settings.volume != volume {
             self.store.settings.volume = volume;
@@ -425,7 +454,13 @@ impl Session {
     }
 
     pub fn change_volume(&mut self, delta: i32) {
-        let volume = (self.store.settings.volume as i32 + delta).clamp(0, 200) as u32;
+        let max = crate::store::MAX_VOLUME;
+        let volume = self
+            .store
+            .settings
+            .volume
+            .saturating_add_signed(delta)
+            .min(max);
         self.set_volume(volume);
         self.flash(&format!("Volume {volume}%"));
     }

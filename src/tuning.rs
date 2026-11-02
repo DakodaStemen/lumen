@@ -104,16 +104,20 @@ pub fn list_shaders(dir: &Path) -> Vec<String> {
 }
 
 /// The `glsl-shaders` value for the chosen shader names: absolute paths of the ones that exist
-/// in `dir`, in the order chosen. Names with path separators are refused.
+/// in `dir`, in the order chosen, joined with mpv's list separator (`;` on Windows, `:`
+/// elsewhere). Names with path separators are refused.
 pub fn shader_list(dir: &Path, chosen: &[String]) -> String {
+    let separator = if cfg!(windows) { ";" } else { ":" };
     chosen
         .iter()
         .filter(|n| !n.contains(['/', '\\', ':']) && *n != ".." && *n != ".")
         .map(|n| dir.join(n))
         .filter(|p| p.is_file())
         .map(|p| p.to_string_lossy().into_owned())
+        // A folder whose path holds the separator cannot be listed without being split.
+        .filter(|p| !p.contains(separator))
         .collect::<Vec<_>>()
-        .join(":")
+        .join(separator)
 }
 
 /// Every mpv option Lumen's settings control, as `(name, value)` pairs.
