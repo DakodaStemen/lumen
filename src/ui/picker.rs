@@ -16,6 +16,19 @@ pub enum Picked {
     Media(Vec<String>),
     Subtitle(String),
     SaveQueue(PathBuf),
+    /// This many chosen files were left out: their names are not valid UTF-8, and mpv's API
+    /// only takes UTF-8 paths.
+    NotUtf8(usize),
+}
+
+/// Splits `paths` into the ones Lumen can pass to mpv and a count of those it cannot.
+pub fn utf8_paths(paths: &[PathBuf]) -> (Vec<String>, usize) {
+    let usable: Vec<String> = paths
+        .iter()
+        .filter_map(|p| p.to_str().map(str::to_owned))
+        .collect();
+    let skipped = paths.len() - usable.len();
+    (usable, skipped)
 }
 
 pub struct Picker {
@@ -55,12 +68,12 @@ impl Picker {
                 .add_filter("Media files", &extensions)
                 .add_filter("All files", &["*"])
                 .pick_files()?;
-            Some(Picked::Media(
-                paths
-                    .iter()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .collect(),
-            ))
+            let (usable, skipped) = utf8_paths(&paths);
+            let mut picked = vec![Picked::Media(usable)];
+            if skipped > 0 {
+                picked.push(Picked::NotUtf8(skipped));
+            }
+            Some(picked)
         });
     }
 
@@ -71,7 +84,10 @@ impl Picker {
                 .add_filter("Subtitles", &["srt", "ass", "ssa", "vtt", "sub", "idx"])
                 .add_filter("All files", &["*"])
                 .pick_file()?;
-            Some(Picked::Subtitle(file.to_string_lossy().into_owned()))
+            Some(vec![match file.to_str() {
+                Some(path) => Picked::Subtitle(path.to_owned()),
+                None => Picked::NotUtf8(1),
+            }])
         });
     }
 
@@ -82,17 +98,21 @@ impl Picker {
                 .set_file_name("Lumen queue.m3u")
                 .add_filter("Playlist", &["m3u"])
                 .save_file()?;
-            Some(Picked::SaveQueue(file))
+            Some(vec![Picked::SaveQueue(file)])
         });
     }
 
-    fn run(&self, ctx: &egui::Context, pick: impl FnOnce() -> Option<Picked> + Send + 'static) {
+    fn run(
+        &self,
+        ctx: &egui::Context,
+        pick: impl FnOnce() -> Option<Vec<Picked>> + Send + 'static,
+    ) {
         if self.busy.swap(true, Ordering::SeqCst) {
             return;
         }
         let (tx, busy, ctx) = (self.tx.clone(), self.busy.clone(), ctx.clone());
         thread::spawn(move || {
-            if let Some(picked) = pick() {
+            for picked in pick().unwrap_or_default() {
                 let _ = tx.send(picked);
             }
             busy.store(false, Ordering::SeqCst);
@@ -107,5 +127,20 @@ fn dialog(start_dir: &str) -> rfd::FileDialog {
         dialog
     } else {
         dialog.set_directory(start_dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn names_that_are_not_utf8_are_counted_not_mangled() {
+        use std::os::unix::ffi::OsStrExt;
+        let latin1 = PathBuf::from(std::ffi::OsStr::from_bytes(b"/m/caf\xe9.mkv"));
+        let (usable, skipped) = utf8_paths(&[PathBuf::from("/m/ok.mkv"), latin1]);
+        assert_eq!(usable, ["/m/ok.mkv"]);
+        assert_eq!(skipped, 1);
     }
 }

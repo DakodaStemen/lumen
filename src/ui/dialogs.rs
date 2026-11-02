@@ -185,11 +185,12 @@ impl Frontend {
                 }
             }
             if fresh {
-                // Start typing after the https:// rather than in front of it.
+                // Focus the field once, so Tab can still reach the buttons; start typing after
+                // the https:// rather than in front of it.
+                field.request_focus();
                 cursor_to_end(ui, field.id, &text);
                 fresh = false;
             }
-            field.request_focus();
             if rejected {
                 let message = if looks_like_local_path(&text) {
                     "That is a file on this computer. Use Open… for files."
@@ -205,8 +206,9 @@ impl Frontend {
             ui.add_space(GAP / 2.0);
             let row = Vec2::new(ui.available_width(), theme::BUTTON_HEIGHT);
             ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
-                // The field keeps focus while the dialog is open, so Enter is read directly.
-                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                // Enter in the field submits (a single-line field gives up focus on Enter). The
+                // Enter that opened the dialog arrives before the field has focus, so it cannot.
+                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 submit = theme::suggested(ui, "Open", Some(96.0)).clicked() || enter;
                 if theme::button(ui, "Cancel").clicked() {
                     cancel = true;
@@ -238,7 +240,11 @@ impl Frontend {
         let mut tuning_changed = false;
         let p = theme::palette(ctx);
         let devices = if state.tab == PrefsTab::Picture {
-            self.session.engine.audio_devices()
+            let engine = &self.session.engine;
+            self.slow
+                .audio_devices
+                .get(|| engine.audio_devices())
+                .clone()
         } else {
             Vec::new()
         };
@@ -246,11 +252,18 @@ impl Frontend {
             self.session.streams.tools.streamlink.is_some(),
             self.session.streams.tools.ytdlp.is_some(),
         );
-        let version = self.session.engine.version();
+        let engine = &self.session.engine;
+        let version = self.slow.version.get(|| engine.version()).clone();
         let max_height = (ctx.content_rect().height() - 190.0).clamp(80.0, 460.0);
         let open = dialog(ctx, "Preferences", 600.0, |ui| {
             ui.spacing_mut().item_spacing.y = GAP;
+            let tab = state.tab;
             view_switcher(ui, &mut state.tab);
+            if state.tab != tab {
+                // A key waiting to be captured must not swallow typing on another tab.
+                state.capture = None;
+                state.message = None;
+            }
             let s = &mut self.session.store.settings;
             egui::ScrollArea::vertical()
                 .id_salt(("prefs", state.tab))
@@ -614,7 +627,8 @@ impl Frontend {
         if !self.info {
             return;
         }
-        let rows = self.session.engine.media_info();
+        let engine = &self.session.engine;
+        let rows = self.slow.media_info.get(|| engine.media_info()).clone();
         let source = self.session.source();
         self.info = dialog(ctx, "Media information", 440.0, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;

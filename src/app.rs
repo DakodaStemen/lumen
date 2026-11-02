@@ -24,7 +24,10 @@ impl App {
         Self {
             frontend,
             video: Arc::new(Mutex::new(Some(video))),
-            media_keys: MediaKeys::spawn(),
+            media_keys: {
+                let ctx = ctx.clone();
+                MediaKeys::spawn(move || ctx.request_repaint())
+            },
         }
     }
 }

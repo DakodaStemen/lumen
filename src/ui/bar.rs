@@ -1,10 +1,20 @@
 //! A slim, draggable bar used for both the seek bar and the volume control.
 
-use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Response, Sense, Ui, Vec2};
+use eframe::egui::{
+    self, Color32, CornerRadius, Id, Key, Pos2, Rect, Response, Sense, Ui, Vec2, WidgetInfo,
+};
 
 use super::theme;
 
 pub struct Bar<'a> {
+    /// A fixed id, so the window can tell when this bar has keyboard focus.
+    pub id: Id,
+    /// What a screen reader calls the bar, such as "Seek".
+    pub label: &'a str,
+    /// The value as read out, such as "1:05 of 3:20".
+    pub value_text: &'a str,
+    /// How far an arrow key moves the handle, from 0 to 1.
+    pub step: f32,
     /// Where the handle sits, from 0 to 1.
     pub value: f32,
     pub enabled: bool,
@@ -23,6 +33,8 @@ pub struct BarOutput {
     pub pressed: bool,
     /// True on the frame the pointer is released or clicks.
     pub released: bool,
+    /// The value chosen with the keyboard this frame (arrows, Page Up/Down, Home, End).
+    pub keyed: Option<f32>,
 }
 
 /// The value a pointer at `x` selects on a bar spanning `rect`.
@@ -36,7 +48,43 @@ pub fn show(ui: &mut Ui, size: Vec2, bar: &Bar) -> BarOutput {
     } else {
         Sense::hover()
     };
-    let (rect, response) = ui.allocate_exact_size(size, sense);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let response = ui.interact(rect, bar.id, sense);
+    let mut keyed = None;
+    if bar.enabled && response.has_focus() {
+        // Arrow keys move the handle instead of moving focus or seeking.
+        theme::claim_arrow_keys(ui, bar.id);
+        let value = bar.value.clamp(0.0, 1.0);
+        keyed = ui
+            .input(|i| {
+                let step = |k: Key| i.key_pressed(k);
+                if step(Key::ArrowRight) || step(Key::ArrowUp) {
+                    Some(value + bar.step)
+                } else if step(Key::ArrowLeft) || step(Key::ArrowDown) {
+                    Some(value - bar.step)
+                } else if step(Key::PageUp) {
+                    Some(value + 5.0 * bar.step)
+                } else if step(Key::PageDown) {
+                    Some(value - 5.0 * bar.step)
+                } else if step(Key::Home) {
+                    Some(0.0)
+                } else if step(Key::End) {
+                    Some(1.0)
+                } else {
+                    None
+                }
+            })
+            .map(|v| v.clamp(0.0, 1.0));
+    }
+    response.widget_info(|| {
+        let mut info = WidgetInfo::slider(
+            bar.enabled,
+            f64::from(bar.value.clamp(0.0, 1.0)) * 100.0,
+            bar.label,
+        );
+        info.current_text_value = Some(bar.value_text.to_owned());
+        info
+    });
     let active = bar.enabled && (response.hovered() || response.dragged());
     let thickness = if active { 6.0 } else { 4.0 };
     let inset = 7.0;
@@ -122,6 +170,7 @@ pub fn show(ui: &mut Ui, size: Vec2, bar: &Bar) -> BarOutput {
         pointer,
         pressed,
         released,
+        keyed,
     }
 }
 

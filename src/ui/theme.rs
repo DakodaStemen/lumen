@@ -42,6 +42,9 @@ pub struct Palette {
     pub accent: Color32,
     /// The accent as a text or line colour, adjusted to read well on the background.
     pub accent_text: Color32,
+    /// The accent as the fill behind `on_accent` text, darkened where needed so that text keeps
+    /// a 4.5:1 contrast (a yellow or pale desktop accent would not otherwise).
+    pub accent_fill: Color32,
     pub on_accent: Color32,
     pub track: Color32,
     pub error: Color32,
@@ -63,6 +66,33 @@ fn mix(base: Color32, top: Color32, amount: f32) -> Color32 {
     base.lerp_to_gamma(top, amount)
 }
 
+/// WCAG relative luminance of an opaque colour.
+fn luminance(c: Color32) -> f32 {
+    let channel = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.040_45 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+}
+
+/// WCAG contrast ratio between two opaque colours, from 1 to 21.
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// The least darkening of `accent` behind white text that reaches WCAG AA (4.5:1).
+fn fill_for_white_text(accent: Color32) -> Color32 {
+    (0..=20)
+        .map(|step| mix(accent, Color32::BLACK, step as f32 * 0.05))
+        .find(|fill| contrast(*fill, Color32::WHITE) >= 4.5)
+        .unwrap_or(Color32::BLACK)
+}
+
 impl Palette {
     pub fn new(scheme: Scheme, accent: Color32) -> Self {
         match scheme {
@@ -79,7 +109,8 @@ impl Palette {
                     card: alpha(fg, 0.08),
                     card_border: Color32::from_black_alpha(92),
                     text: fg,
-                    dim: mix(window, fg, 0.55),
+                    // 0.6 keeps dimmed text at 4.5:1 or more on every surface, popovers included.
+                    dim: mix(window, fg, 0.6),
                     border: alpha(fg, 0.12),
                     hover: alpha(fg, 0.07),
                     button: alpha(fg, 0.10),
@@ -89,6 +120,7 @@ impl Palette {
                     selected: alpha(fg, 0.10),
                     accent,
                     accent_text: mix(accent, fg, 0.35),
+                    accent_fill: fill_for_white_text(accent),
                     on_accent: Color32::WHITE,
                     track: alpha(fg, 0.15),
                     error: Color32::from_rgb(0xff, 0x93, 0x8c),
@@ -108,7 +140,8 @@ impl Palette {
                     card: Color32::WHITE,
                     card_border: alpha(fg, 0.09),
                     text: mix(window, fg, 0.8),
-                    dim: mix(window, fg, 0.45),
+                    // 0.6 keeps dimmed text at 4.5:1 or more on every surface, the sidebar included.
+                    dim: mix(window, fg, 0.6),
                     border: alpha(fg, 0.12),
                     hover: alpha(fg, 0.05),
                     button: alpha(fg, 0.08),
@@ -118,6 +151,7 @@ impl Palette {
                     selected: alpha(fg, 0.08),
                     accent,
                     accent_text: mix(accent, fg, 0.15),
+                    accent_fill: fill_for_white_text(accent),
                     on_accent: Color32::WHITE,
                     track: alpha(fg, 0.15),
                     error: Color32::from_rgb(0xc3, 0x00, 0x00),
@@ -322,7 +356,7 @@ pub fn suggested(ui: &mut Ui, text: &str, width: Option<f32>) -> Response {
     let p = palette(ui.ctx());
     let label = RichText::new(text).color(p.on_accent);
     let button = Button::new(label)
-        .fill(p.accent)
+        .fill(p.accent_fill)
         .corner_radius(RADIUS)
         .min_size(Vec2::new(width.unwrap_or(0.0), BUTTON_HEIGHT));
     let response = ui.add(button);
@@ -356,7 +390,7 @@ pub fn pill(ui: &mut Ui, text: &str, primary: bool, width: f32) -> Response {
         let painter = ui.painter();
         let radius = CornerRadius::same((size.y / 2.0) as u8);
         if primary {
-            painter.rect_filled(rect, radius, p.accent);
+            painter.rect_filled(rect, radius, p.accent_fill);
             if down {
                 painter.rect_filled(rect, radius, Color32::from_black_alpha(40));
             } else if response.hovered() {
@@ -609,6 +643,28 @@ pub fn menu_text<R>(
 
 /// A GTK-style scale: a thin track filled in the accent colour with a round white knob, and
 /// its value in dim text beside it.
+/// Gives the arrow keys (and Page Up/Down, Home, End) to the focused widget `id`: focus does
+/// not move away on an arrow, and the window's shortcuts leave those keys alone.
+pub fn claim_arrow_keys(ui: &Ui, id: Id) {
+    let filter = egui::EventFilter {
+        horizontal_arrows: true,
+        vertical_arrows: true,
+        ..Default::default()
+    };
+    ui.memory_mut(|m| m.set_focus_lock_filter(id, filter));
+    ui.ctx().data_mut(|d| d.insert_temp(arrow_owner_id(), id));
+}
+
+/// The widget that last claimed the arrow keys, if it still has focus.
+pub fn arrow_keys_owner(ctx: &egui::Context) -> Option<Id> {
+    let owner = ctx.data(|d| d.get_temp::<Id>(arrow_owner_id()))?;
+    ctx.memory(|m| m.has_focus(owner)).then_some(owner)
+}
+
+fn arrow_owner_id() -> Id {
+    Id::new("lumen-arrow-keys-owner")
+}
+
 pub fn slider(
     ui: &mut Ui,
     value: &mut i64,
@@ -635,6 +691,7 @@ pub fn slider(
         }
     }
     if response.has_focus() {
+        claim_arrow_keys(ui, response.id);
         let step = ui.input(|i| {
             i64::from(i.key_pressed(egui::Key::ArrowRight))
                 - i64::from(i.key_pressed(egui::Key::ArrowLeft))
@@ -993,6 +1050,40 @@ mod tests {
                 "{scheme:?} text must stand out from the window"
             );
             assert_eq!(p.accent, accent);
+        }
+    }
+
+    #[test]
+    fn dimmed_text_meets_wcag_aa_on_every_surface() {
+        for scheme in [Scheme::Dark, Scheme::Light] {
+            let p = Palette::new(scheme, Color32::from_rgb(0x35, 0x84, 0xe4));
+            for (name, surface) in [
+                ("window", p.window),
+                ("view", p.view),
+                ("sidebar", p.sidebar),
+                ("popover", p.popover),
+                ("dialog", p.dialog),
+            ] {
+                for (what, text) in [("text", p.text), ("dim", p.dim)] {
+                    let ratio = contrast(text, surface);
+                    assert!(ratio >= 4.5, "{scheme:?} {what} on {name}: {ratio:.2}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn text_on_any_accent_meets_wcag_aa() {
+        // GNOME's accents, a pale one a desktop could report, and pure white.
+        let accents = [
+            0x3584e4, 0x2190a4, 0x3a944a, 0xc88800, 0xed5b00, 0xe62d42, 0xd56199, 0x9141ac,
+            0x6f8396, 0xf6f5c0, 0xffffff,
+        ];
+        for rgb in accents {
+            let [_, r, g, b] = u32::to_be_bytes(rgb);
+            let p = Palette::new(Scheme::Light, Color32::from_rgb(r, g, b));
+            let ratio = contrast(p.on_accent, p.accent_fill);
+            assert!(ratio >= 4.5, "#{rgb:06x}: {ratio:.2}");
         }
     }
 }

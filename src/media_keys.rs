@@ -68,13 +68,14 @@ pub struct MediaKeys {
 }
 
 impl MediaKeys {
-    /// Starts the worker. `None` only when the thread cannot be created.
-    pub fn spawn() -> Option<Self> {
+    /// Starts the worker. `wake` is called after each command so the UI can act on it straight
+    /// away even while it is not redrawing. `None` only when the thread cannot be created.
+    pub fn spawn(wake: impl Fn() + Send + 'static) -> Option<Self> {
         let (updates, update_rx) = mpsc::channel::<Status>();
         let (command_tx, commands) = mpsc::channel::<Command>();
         thread::Builder::new()
             .name("media-keys".into())
-            .spawn(move || worker(update_rx, command_tx))
+            .spawn(move || worker(update_rx, command_tx, wake))
             .ok()?;
         Some(Self {
             updates,
@@ -101,7 +102,7 @@ impl MediaKeys {
     }
 }
 
-fn worker(updates: Receiver<Status>, commands: Sender<Command>) {
+fn worker(updates: Receiver<Status>, commands: Sender<Command>, wake: impl Fn() + Send + 'static) {
     let config = PlatformConfig {
         dbus_name: "lumen_rs",
         display_name: "Lumen",
@@ -113,6 +114,7 @@ fn worker(updates: Receiver<Status>, commands: Sender<Command>) {
     let attached = controls.attach(move |event| {
         if let Some(command) = command_for(&event) {
             let _ = commands.send(command);
+            wake();
         }
     });
     if attached.is_err() {
