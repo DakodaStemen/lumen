@@ -17,7 +17,7 @@ jobs:
       - run: cargo install cargo-packager cargo-generate-rpm --locked
       - run: cargo packager --release --formats deb,appimage
       - run: cargo build --release --locked && cargo generate-rpm
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: |
@@ -38,7 +38,7 @@ jobs:
         run: |
           flatpak install --user -y --bundle dist-lumen.flatpak
           flatpak run --command=lumen-rs io.github.DakodaStemen.Lumen --version | grep -q lumen-rs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: flatpak
           path: dist-lumen.flatpak
@@ -78,7 +78,7 @@ jobs:
           ls /tmp/lumen-dmg/*.app/Contents/Frameworks | grep -q libmpv
           if otool -L /tmp/lumen-dmg/*.app/Contents/MacOS/lumen-rs | grep -E '/opt/homebrew|/usr/local'; then echo "links Homebrew path"; exit 1; fi
           hdiutil detach /tmp/lumen-dmg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-${{ matrix.arch }}
           path: dist/Lumen-${{ matrix.arch }}.dmg
@@ -119,7 +119,7 @@ jobs:
           Start-Process msiexec -ArgumentList "/a `"$msi`" /qn TARGETDIR=$env:RUNNER_TEMP\\msi" -Wait
           Get-ChildItem $env:RUNNER_TEMP/msi -Recurse -File | ForEach-Object { "$($_.Length) $($_.FullName)" }
           if (-not (Get-ChildItem $env:RUNNER_TEMP/msi -Recurse -Filter libmpv-2.dll)) { throw "libmpv-2.dll missing from MSI" }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: |
