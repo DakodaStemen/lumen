@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Engineering baseline (2026-11-03): `Makefile` (`help setup lint fmt test build ci`), `SECURITY.md`,
+  PR and issue templates, `.editorconfig`, `.gitattributes`, markdownlint config, pre-commit config,
+  `docs/adr/` with ADR-0001, a markdown lint job, job timeouts and concurrency in CI, and a
+  Dependabot cooldown. No product code changes.
+
 - Fixes from an audit of the whole repository:
   - Queue: removing a row from its context menu no longer leaves the selection on the wrong row.
     A file that will not open is skipped for the next one (it stops when every entry has failed,

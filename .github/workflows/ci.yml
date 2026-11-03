@@ -2,12 +2,16 @@ name: Rust
 on: [push, pull_request]
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   APT_DEPS: libx11-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libmpv-dev ffmpeg streamlink
 jobs:
   check:
     name: check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -43,6 +47,7 @@ jobs:
 
   msrv:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -54,6 +59,7 @@ jobs:
 
   stable-floating:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,6 +74,7 @@ jobs:
 
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2
@@ -92,6 +99,7 @@ jobs:
   newer-libmpv:
     name: playback (Arch, libmpv >= 0.41)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     container: archlinux:latest
     # Temporary: a_loaded_subtitle_file_comes_back_with_the_video fails on mpv
     # 0.41 (subtitle restoration backend bug). Remove after the backend fix lands.
@@ -114,3 +122,10 @@ jobs:
           test "$(vercmp "${pkg#*:}" 0.41.0)" -ge 0
       - name: Build and test against system libmpv
         run: xvfb-run -a -s "-screen 0 1600x1000x24" cargo test --locked
+  docs:
+    name: Markdown lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: npx -y markdownlint-cli2 "**/*.md"

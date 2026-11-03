@@ -23,3 +23,17 @@ Keep mpv calls in `engine.rs`, player behaviour in `session.rs`, queue ordering 
 `queue.rs`, persistence in `store.rs`, key bindings in `keys.rs`, GL rendering in
 `video.rs`, and layout and widgets in `src/ui/`. New behaviour belongs in `Session` with a test in
 `tests/playback.rs`, not in the window code.
+
+## Checks before you push
+
+`make ci` runs `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`,
+markdownlint, `cargo test --locked` and `cargo build --release --locked`. Run it before pushing.
+Optional: `pre-commit install` runs fast checks on each commit (`.pre-commit-config.yaml`).
+
+## Branches, commits and pull requests
+
+- Branch prefixes: `feat/`, `fix/`, `docs/`, `chore/`, `ci/`, `test/`.
+- PR titles follow Conventional Commits (`feat: ...`, `fix: ...`, `chore: ...`). One purpose per PR.
+- Commit messages say what changed and why, in the imperative mood.
+- Update `CHANGELOG.md` under Unreleased when behavior changes.
+- Architecture decisions are recorded in [docs/adr](docs/adr/README.md).
