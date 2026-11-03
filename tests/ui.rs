@@ -739,3 +739,81 @@ fn the_widgets_the_demo_recorder_aims_at_report_where_they_are() {
         );
     }
 }
+
+#[test]
+fn delete_removes_the_selected_row_and_the_selection_moves_to_the_next() {
+    let Some(fx) = fixture() else { return };
+    let mut h = harness(quiet_session());
+    h.state_mut().front().session.add(
+        &[
+            fx.path("show/ep1.mp4"),
+            fx.path("show/ep2.mp4"),
+            fx.path("tracks.mkv"),
+        ],
+        false,
+    );
+    settle(&mut h);
+    first(&h, "ep2.mp4").click();
+    settle(&mut h);
+    assert_eq!(h.state_mut().front().selected, Some(1));
+    h.key_press(Key::Delete);
+    settle(&mut h);
+    let front = h.state_mut().front();
+    let titles: Vec<&str> = front
+        .session
+        .queue
+        .items
+        .iter()
+        .map(|i| i.title.as_str())
+        .collect();
+    assert_eq!(titles, ["ep1.mp4", "tracks.mkv"]);
+    assert_eq!(front.selected, Some(1), "the row that took its place");
+}
+
+#[test]
+fn switching_preferences_tabs_drops_a_waiting_key_capture() {
+    let Some(_fx) = fixture() else { return };
+    let mut h = harness(quiet_session());
+    h.state_mut()
+        .front()
+        .open_prefs(lumen_rs::ui::PrefsTab::Keys);
+    settle(&mut h);
+    h.get_by_label("Shortcut for Mute").scroll_to_me();
+    settle(&mut h);
+    h.get_by_label("Shortcut for Mute").click();
+    settle(&mut h);
+    assert!(
+        h.state_mut()
+            .front()
+            .prefs
+            .as_ref()
+            .unwrap()
+            .capture
+            .is_some()
+    );
+    h.get_by_label("Streams").click();
+    settle(&mut h);
+    assert_eq!(
+        h.state_mut().front().prefs.as_ref().and_then(|p| p.capture),
+        None
+    );
+    // Typing now changes nothing in the key table.
+    h.key_press(Key::K);
+    settle(&mut h);
+    assert!(h.state_mut().front().session.store.settings.keys.is_empty());
+}
+
+#[test]
+fn the_seek_and_volume_bars_are_named_for_screen_readers() {
+    let Some(fx) = fixture() else { return };
+    let mut h = harness(quiet_session());
+    h.state_mut()
+        .front()
+        .session
+        .add(&[fx.path("tracks.mkv")], true);
+    assert!(wait(&mut h.state_mut().front().session, 8, |s| s.state()
+        == State::Playing));
+    pass_time(&mut h, 400);
+    h.get_by_label("Seek");
+    h.get_by_label("Volume");
+}

@@ -297,6 +297,16 @@ impl Queue {
                 let Ok(text) = fs::read_to_string(&resolved) else {
                     continue;
                 };
+                // Editors on Windows often start the file with a byte-order mark.
+                let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+                // A downloaded HLS stream is one piece of media, not a list of segments to queue.
+                if text.contains("#EXT-X-TARGETDURATION") {
+                    self.items.push(Item {
+                        title: title_of(&source),
+                        source,
+                    });
+                    continue;
+                }
                 let base = resolved.parent().map(Path::to_path_buf).unwrap_or_default();
                 let entries: Vec<String> = text
                     .lines()
@@ -492,6 +502,37 @@ mod tests {
             dir_path.join("song.mp3").to_string_lossy()
         );
         assert_eq!(queue.items[1].source, "https://x.test/live.m3u8");
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_become_an_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_path = strip_verbatim(fs::canonicalize(dir.path()).unwrap());
+        let list = dir_path.join("bom.m3u");
+        fs::write(&list, "\u{feff}#EXTM3U\r\nsong.mp3\r\n").unwrap();
+        let mut queue = Queue::default();
+        queue.add(&[list.to_string_lossy().into_owned()]);
+        assert_eq!(queue.items.len(), 1);
+        assert_eq!(
+            queue.items[0].source,
+            dir_path.join("song.mp3").to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn a_local_hls_playlist_is_queued_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let list = dir.path().join("stream.m3u8");
+        fs::write(
+            &list,
+            "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.0,\nseg0.ts\n#EXTINF:6.0,\nseg1.ts\n",
+        )
+        .unwrap();
+        let source = list.to_string_lossy().into_owned();
+        let mut queue = Queue::default();
+        queue.add(std::slice::from_ref(&source));
+        assert_eq!(queue.items.len(), 1);
+        assert_eq!(queue.items[0].source, source);
     }
 
     #[test]

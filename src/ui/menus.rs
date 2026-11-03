@@ -40,6 +40,14 @@ fn row<'a>(ui: &Ui, label: impl Into<Atom<'a>>, checked: bool) -> Button<'a> {
     }
 }
 
+/// Tells screen readers whether a check-marked row is on; the mark itself is only drawn.
+fn speak_check(response: &egui::Response, checked: bool, label: &str) {
+    let enabled = response.enabled();
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, checked, label)
+    });
+}
+
 /// A plain entry that closes the menu when clicked.
 fn plain(ui: &mut Ui, label: &str) -> bool {
     let response = ui.add(row(ui, label, false));
@@ -67,6 +75,10 @@ pub(super) fn choice(ui: &mut Ui, label: &str, selected: bool) -> bool {
     let response = ui
         .add(row(ui, shorten(label), selected))
         .on_hover_text(label);
+    let enabled = response.enabled();
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, selected, label)
+    });
     geometry::note(ui.ctx(), label, response.rect);
     let clicked = response.clicked();
     if clicked {
@@ -133,6 +145,9 @@ impl Frontend {
             button = button.shortcut_text(hint);
         }
         let response = ui.add(button);
+        if has_gutter(ui) || selected {
+            speak_check(&response, selected, label);
+        }
         geometry::note(ui.ctx(), label, response.rect);
         if response.clicked() {
             ui.close();
@@ -285,7 +300,7 @@ impl Frontend {
         });
         submenu(ui, "Shaders", true, |ui| {
             let dir = tuning::shader_dir();
-            let available = tuning::list_shaders(&dir);
+            let available = self.slow.shaders.get(|| tuning::list_shaders(&dir)).clone();
             if available.is_empty() {
                 disabled(ui, "No shaders found");
             }
@@ -293,7 +308,9 @@ impl Frontend {
             for name in &available {
                 let on = self.session.store.settings.shaders.contains(name);
                 // A checkbox-style entry that keeps the menu open for several picks.
-                if ui.add(row(ui, name.as_str(), on)).clicked() {
+                let response = ui.add(row(ui, name.as_str(), on));
+                speak_check(&response, on, name);
+                if response.clicked() {
                     let list = &mut self.session.store.settings.shaders;
                     if on {
                         list.retain(|n| n != name);
@@ -337,6 +354,7 @@ impl Frontend {
         let supported = always_on_top_supported();
         let button = row(ui, "Always on top", on_top && supported).shortcut_text(hint);
         let response = ui.add_enabled(supported, button);
+        speak_check(&response, on_top && supported, "Always on top");
         let response = if supported {
             response
         } else {
@@ -409,11 +427,15 @@ impl Frontend {
         });
         separator(ui);
         let queue = &mut self.session.queue;
-        if ui.add(row(ui, "Shuffle", queue.shuffle)).clicked() {
+        let response = ui.add(row(ui, "Shuffle", queue.shuffle));
+        speak_check(&response, queue.shuffle, "Shuffle");
+        if response.clicked() {
             queue.shuffle = !queue.shuffle;
             ui.close();
         }
-        if ui.add(row(ui, "Repeat", queue.repeat)).clicked() {
+        let response = ui.add(row(ui, "Repeat", queue.repeat));
+        speak_check(&response, queue.repeat, "Repeat");
+        if response.clicked() {
             queue.repeat = !queue.repeat;
             ui.close();
         }

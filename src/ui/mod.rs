@@ -32,6 +32,17 @@ use icons::Icon;
 use picker::{Picked, Picker};
 
 const TICK: Duration = Duration::from_millis(200);
+/// Height of a queue row.
+const QUEUE_ROW: f32 = 38.0;
+/// The seek and volume bars' ids.
+fn seek_bar_id() -> egui::Id {
+    egui::Id::new("lumen-seek-bar")
+}
+fn volume_bar_id() -> egui::Id {
+    egui::Id::new("lumen-volume-bar")
+}
+/// How often the window wakes when nothing is playing or about to change.
+const IDLE_TICK: Duration = Duration::from_secs(1);
 /// Controls hide in fullscreen and the mini player after the pointer has been still this long.
 const CHROME_HIDE: Duration = Duration::from_secs(2);
 /// A single click waits this long for a second one before it toggles pause.
@@ -134,6 +145,44 @@ pub struct Frontend {
     window_buttons: window::ButtonLayout,
     /// The window edge under the pointer while it can resize the undecorated window.
     edge: Option<egui::ResizeDirection>,
+    /// Things read from disk or mpv for open menus and dialogs, refreshed now and then
+    /// rather than on every frame.
+    slow: SlowReads,
+}
+
+/// A value refreshed at most once per `REFRESH`.
+struct Cached<T> {
+    at: Option<Instant>,
+    value: T,
+}
+
+impl<T: Default> Default for Cached<T> {
+    fn default() -> Self {
+        Self {
+            at: None,
+            value: T::default(),
+        }
+    }
+}
+
+impl<T> Cached<T> {
+    const REFRESH: Duration = Duration::from_secs(1);
+
+    fn get(&mut self, read: impl FnOnce() -> T) -> &T {
+        if self.at.is_none_or(|at| at.elapsed() >= Self::REFRESH) {
+            self.value = read();
+            self.at = Some(Instant::now());
+        }
+        &self.value
+    }
+}
+
+#[derive(Default)]
+struct SlowReads {
+    shaders: Cached<Vec<String>>,
+    audio_devices: Cached<Vec<(String, String)>>,
+    media_info: Cached<Vec<(String, String)>>,
+    version: Cached<String>,
 }
 
 pub use crate::platform::always_on_top_supported;
@@ -170,6 +219,7 @@ impl Frontend {
             csd: window::client_side_decorations(),
             window_buttons: window::button_layout(),
             edge: None,
+            slow: SlowReads::default(),
         };
         frontend.sync_theme(ctx);
         frontend
@@ -271,7 +321,21 @@ impl Frontend {
         if self.csd {
             window::frame(ctx, self.edge);
         }
-        ctx.request_repaint_after(TICK);
+        ctx.request_repaint_after(if self.needs_tick() { TICK } else { IDLE_TICK });
+    }
+
+    /// Whether something changes on its own soon: playback, a link being resolved, a message
+    /// or a timer waiting to expire. Otherwise the window only redraws on input, on a new video
+    /// frame, or on the slow heartbeat that catches anything else mpv reports.
+    fn needs_tick(&self) -> bool {
+        matches!(
+            self.session.state(),
+            State::Playing | State::Opening | State::Buffering
+        ) || self.session.streams.activity().is_some()
+            || self.session.flash_message().is_some()
+            || self.pending_click.is_some()
+            || self.scrubbing.is_some()
+            || self.last_pointer_move.elapsed() < CHROME_HIDE + TICK
     }
 
     // ----- input and timing -----
@@ -281,17 +345,21 @@ impl Frontend {
             self.handle_picked(picked);
         }
         let (dropped, hovering) = ctx.input(|i| {
-            let paths: Vec<String> = i
+            let paths: Vec<std::path::PathBuf> = i
                 .raw
                 .dropped_files
                 .iter()
-                .filter_map(|f| f.path.as_ref().map(|p| p.to_string_lossy().into_owned()))
+                .filter_map(|f| f.path.clone())
                 .collect();
             (paths, !i.raw.hovered_files.is_empty())
         });
         self.dropping = hovering;
+        let (dropped, skipped) = picker::utf8_paths(&dropped);
         if !dropped.is_empty() {
             self.session.add(&dropped, true);
+        }
+        if skipped > 0 {
+            self.flash_not_utf8(skipped);
         }
 
         self.handle_keys(ctx);
@@ -327,6 +395,7 @@ impl Frontend {
 
     fn handle_picked(&mut self, picked: Picked) {
         match picked {
+            Picked::NotUtf8(count) => self.flash_not_utf8(count),
             Picked::Media(paths) => {
                 if let Some(dir) = paths.first().and_then(|p| std::path::Path::new(p).parent()) {
                     self.session.store.settings.last_dir = dir.to_string_lossy().into_owned();
@@ -344,6 +413,13 @@ impl Frontend {
                     .flash(&format!("Could not save the queue ({e})")),
             },
         }
+    }
+
+    fn flash_not_utf8(&mut self, count: usize) {
+        let files = if count == 1 { "a file" } else { "some files" };
+        self.session.flash(&format!(
+            "Left out {files} whose name is not valid UTF-8; rename to open."
+        ));
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
@@ -366,18 +442,46 @@ impl Frontend {
         {
             return;
         }
-        if ctx.wants_keyboard_input() {
+        // Shortcuts still reach the player behind a dialog (so a key rebound in Preferences can
+        // be tried at once), but not Remove: it would delete a queue row the user cannot see.
+        let dialog_open = self.url.is_some() || self.prefs.is_some() || self.info;
+        let focused = ctx.memory(|m| m.focused());
+        if focused.is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some()) {
             return; // typing in a text field
         }
+        // A focused button or row takes Space and Enter for itself, and a focused bar its arrow
+        // keys; other keys stay shortcuts.
+        let on_bar = theme::arrow_keys_owner(ctx).is_some();
+        let activates = |b: &Binding| {
+            use egui::Key::*;
+            focused.is_some()
+                && !b.modifiers.any()
+                && (matches!(b.key, Space | Enter)
+                    || on_bar
+                        && matches!(
+                            b.key,
+                            ArrowLeft
+                                | ArrowRight
+                                | ArrowUp
+                                | ArrowDown
+                                | PageUp
+                                | PageDown
+                                | Home
+                                | End
+                        ))
+        };
         let mut pressed = Vec::new();
         ctx.input_mut(|input| {
             for (action, binding) in self.keymap.bindings() {
-                if input.consume_key(binding.modifiers, binding.key) {
+                if !activates(binding) && input.consume_key(binding.modifiers, binding.key) {
                     pressed.push(*action);
                 }
             }
         });
         for action in pressed {
+            if dialog_open && action == Action::Remove {
+                continue;
+            }
             self.perform(ctx, action);
         }
     }
@@ -402,6 +506,9 @@ impl Frontend {
         let Some((key, modifiers)) = pressed else {
             return;
         };
+        // The key is the new binding and nothing else: Space or Enter must not also press the
+        // focused key button and start another capture.
+        ctx.input_mut(|i| i.consume_key(modifiers, key));
         let Some(prefs) = self.prefs.as_mut() else {
             return;
         };
@@ -729,116 +836,134 @@ impl Frontend {
         let p = theme::palette(ui.ctx());
         let mut play = None;
         let mut remove = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                let mut shown = 0;
-                for (index, item) in self.session.queue.items.iter().enumerate() {
-                    if !needle.is_empty()
-                        && !item.title.to_lowercase().contains(&needle)
-                        && !item.source.to_lowercase().contains(&needle)
-                    {
-                        continue;
-                    }
-                    shown += 1;
-                    let current = self.session.queue.current == Some(index);
-                    let selected = self.selected == Some(index);
-                    let (rect, row) = ui
-                        .allocate_exact_size(Vec2::new(ui.available_width(), 38.0), Sense::click());
-                    geometry::note(ui.ctx(), &item.title, rect);
-                    let fill = if selected {
-                        p.selected
-                    } else if row.hovered() {
-                        p.hover
-                    } else {
-                        Color32::TRANSPARENT
-                    };
-                    ui.painter()
-                        .rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
-                    let (icon, tint) = if current {
-                        (Icon::Play, p.accent_text)
-                    } else if is_audio(&item.source) {
-                        (Icon::AudioFile, p.dim)
-                    } else {
-                        (Icon::VideoFile, p.dim)
-                    };
-                    let glyph = egui::Rect::from_min_size(
-                        egui::pos2(rect.left() + 10.0, rect.center().y - theme::ICON / 2.0),
-                        Vec2::splat(theme::ICON),
-                    );
-                    icons::paint(ui, icon, glyph, theme::ICON, tint);
-                    let text_rect = egui::Rect::from_min_max(
-                        egui::pos2(glyph.right() + 10.0, rect.top()),
-                        egui::pos2(rect.right() - 10.0, rect.bottom()),
-                    );
-                    // Left-aligned, unlike `ui.put`, which centres its widget.
-                    let mut text_ui = ui.new_child(
-                        UiBuilder::new()
-                            .max_rect(text_rect)
-                            .layout(Layout::left_to_right(Align::Center)),
-                    );
-                    // The row's own tooltip names the file, so the label adds none of its own.
-                    text_ui.add(
-                        egui::Label::new(RichText::new(&item.title).color(p.text))
-                            .truncate()
-                            .show_tooltip_when_elided(false)
-                            .selectable(false),
-                    );
-                    if row.has_focus() {
-                        ui.painter().rect_stroke(
-                            rect.shrink(1.0),
-                            CornerRadius::same(theme::RADIUS),
-                            Stroke::new(2.0_f32, p.accent.gamma_multiply(0.6)),
-                            StrokeKind::Inside,
+        let items = &self.session.queue.items;
+        // Only rows on screen are laid out, so a playlist of thousands stays cheap.
+        let matches: Vec<usize> = if needle.is_empty() {
+            (0..items.len()).collect()
+        } else {
+            items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| {
+                    item.title.to_lowercase().contains(&needle)
+                        || item.source.to_lowercase().contains(&needle)
+                })
+                .map(|(index, _)| index)
+                .collect()
+        };
+        ui.scope(|ui| {
+            // `show_rows` spaces rows by the outer item spacing.
+            ui.spacing_mut().item_spacing.y = 2.0;
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show_rows(ui, QUEUE_ROW, matches.len(), |ui, range| {
+                    for &index in &matches[range] {
+                        let item = &self.session.queue.items[index];
+                        let current = self.session.queue.current == Some(index);
+                        let selected = self.selected == Some(index);
+                        let (rect, row) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), QUEUE_ROW),
+                            Sense::click(),
                         );
-                    }
-                    row.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            true,
-                            item.title.as_str(),
-                        )
-                    });
-                    if row.clicked() {
-                        self.selected = Some(index);
-                    }
-                    if row.double_clicked()
-                        || (row.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                    {
-                        play = Some(index);
-                    }
-                    row.on_hover_text(&item.source).context_menu(|ui| {
-                        menus::begin(ui, 200.0, false);
-                        if ui.button("Play").clicked() {
+                        geometry::note(ui.ctx(), &item.title, rect);
+                        let fill = if selected {
+                            p.selected
+                        } else if row.hovered() {
+                            p.hover
+                        } else {
+                            Color32::TRANSPARENT
+                        };
+                        ui.painter()
+                            .rect_filled(rect, CornerRadius::same(theme::RADIUS), fill);
+                        let (icon, tint) = if current {
+                            (Icon::Play, p.accent_text)
+                        } else if is_audio(&item.source) {
+                            (Icon::AudioFile, p.dim)
+                        } else {
+                            (Icon::VideoFile, p.dim)
+                        };
+                        let glyph = egui::Rect::from_min_size(
+                            egui::pos2(rect.left() + 10.0, rect.center().y - theme::ICON / 2.0),
+                            Vec2::splat(theme::ICON),
+                        );
+                        icons::paint(ui, icon, glyph, theme::ICON, tint);
+                        let text_rect = egui::Rect::from_min_max(
+                            egui::pos2(glyph.right() + 10.0, rect.top()),
+                            egui::pos2(rect.right() - 10.0, rect.bottom()),
+                        );
+                        // Left-aligned, unlike `ui.put`, which centres its widget.
+                        let mut text_ui = ui.new_child(
+                            UiBuilder::new()
+                                .max_rect(text_rect)
+                                .layout(Layout::left_to_right(Align::Center)),
+                        );
+                        // The row's own tooltip names the file, so the label adds none of its own.
+                        text_ui.add(
+                            egui::Label::new(RichText::new(&item.title).color(p.text))
+                                .truncate()
+                                .show_tooltip_when_elided(false)
+                                .selectable(false),
+                        );
+                        if row.has_focus() {
+                            ui.painter().rect_stroke(
+                                rect.shrink(1.0),
+                                CornerRadius::same(theme::RADIUS),
+                                Stroke::new(2.0_f32, p.accent.gamma_multiply(0.6)),
+                                StrokeKind::Inside,
+                            );
+                        }
+                        row.widget_info(|| {
+                            // The play icon and the highlight are only drawn; say them too.
+                            let label = if current {
+                                format!("{}, now playing", item.title)
+                            } else {
+                                item.title.clone()
+                            };
+                            egui::WidgetInfo::selected(
+                                egui::WidgetType::Button,
+                                true,
+                                selected,
+                                label,
+                            )
+                        });
+                        if row.clicked() {
+                            self.selected = Some(index);
+                        }
+                        if row.double_clicked()
+                            || (row.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                        {
                             play = Some(index);
-                            ui.close();
                         }
-                        if ui.button("Copy location").clicked() {
-                            ui.ctx().copy_text(item.source.clone());
-                            ui.close();
-                        }
-                        if ui.button("Remove from queue").clicked() {
-                            remove = Some(index);
-                            ui.close();
-                        }
-                    });
-                }
-                if self.session.queue.items.is_empty() {
-                    ui.add_space(GAP);
-                    ui.vertical_centered(|ui| ui.label(theme::muted("Nothing queued yet.")));
-                } else if shown == 0 {
-                    ui.add_space(GAP);
-                    ui.vertical_centered(|ui| ui.label(theme::muted("No matches.")));
-                }
-            });
+                        row.on_hover_text(&item.source).context_menu(|ui| {
+                            menus::begin(ui, 200.0, false);
+                            if ui.button("Play").clicked() {
+                                play = Some(index);
+                                ui.close();
+                            }
+                            if ui.button("Copy location").clicked() {
+                                ui.ctx().copy_text(item.source.clone());
+                                ui.close();
+                            }
+                            if ui.button("Remove from queue").clicked() {
+                                remove = Some(index);
+                                ui.close();
+                            }
+                        });
+                    }
+                    if self.session.queue.items.is_empty() {
+                        ui.add_space(GAP);
+                        ui.vertical_centered(|ui| ui.label(theme::muted("Nothing queued yet.")));
+                    } else if matches.is_empty() {
+                        ui.add_space(GAP);
+                        ui.vertical_centered(|ui| ui.label(theme::muted("No matches.")));
+                    }
+                });
+        });
         if let Some(index) = play {
             self.session.play_index(index, None, false);
         }
         if let Some(index) = remove {
-            if self.selected == Some(index) {
-                self.selected = None;
-            }
+            self.selected = selection_after_remove(self.selected, index);
             self.session.remove(index);
         }
     }
@@ -1026,6 +1151,7 @@ impl Frontend {
         if let Some(message) = message {
             let painter = ui.painter();
             let font = FontId::proportional(self.body_size.round());
+            let message_text = message.clone();
             let galley = painter.layout(
                 message,
                 font,
@@ -1043,6 +1169,13 @@ impl Frontend {
                 Color32::from_black_alpha(180),
             );
             painter.galley(pill.min + Vec2::new(12.0, 6.0), galley, Color32::WHITE);
+            // Read out as it appears, not only painted.
+            ui.ctx()
+                .accesskit_node_builder(egui::Id::new("lumen-message"), |node| {
+                    node.set_role(egui::accesskit::Role::Status);
+                    node.set_live(egui::accesskit::Live::Polite);
+                    node.set_value(message_text.as_str());
+                });
         }
 
         if self.dropping {
@@ -1294,6 +1427,11 @@ impl Frontend {
         let duration = self.session.engine.duration_ms().filter(|d| *d > 0);
         let live = self.session.is_live();
         let seekable = self.session.engine.seekable() && !live && duration.is_some();
+        if !seekable {
+            // A drag cut short (the file ended, or stopped being seekable) never reports its
+            // release; without this the time shown would stay frozen.
+            self.scrubbing = None;
+        }
         let shown = self
             .scrubbing
             .zip(duration)
@@ -1342,10 +1480,18 @@ impl Frontend {
                 }
                 _ => None,
             };
+            let value_text = format!("{} of {}", clock(shown), clock(duration.unwrap_or(0)));
+            let seek_step = duration.map_or(0.0, |d| {
+                (f64::from(self.session.store.settings.seek_step) * 1000.0 / d as f64) as f32
+            });
             let output = bar::show(
                 ui,
                 Vec2::new(width, 24.0),
                 &Bar {
+                    id: seek_bar_id(),
+                    label: "Seek",
+                    value_text: &value_text,
+                    step: seek_step,
                     value,
                     enabled: seekable,
                     markers: &markers,
@@ -1354,6 +1500,9 @@ impl Frontend {
                 },
             );
             geometry::note(ui.ctx(), "Seek bar", output.response.rect);
+            if let (Some(value), Some(d)) = (output.keyed, duration) {
+                self.session.seek_ms((f64::from(value) * d as f64) as i64);
+            }
             if output.pressed {
                 self.scrubbing = output.pointer;
             }
@@ -1499,6 +1648,10 @@ impl Frontend {
                 &mut right,
                 Vec2::new(100.0, 24.0),
                 &Bar {
+                    id: volume_bar_id(),
+                    label: "Volume",
+                    value_text: &format!("{volume}%"),
+                    step: 5.0 / 200.0,
                     value: volume as f32 / 200.0,
                     enabled: true,
                     markers: &[0.5],
@@ -1508,6 +1661,10 @@ impl Frontend {
             );
             geometry::note(&ctx, "Volume bar", output.response.rect);
             output.response.on_hover_text(format!("Volume {volume}%"));
+            if let Some(value) = output.keyed {
+                self.session
+                    .set_volume((value * 200.0 / 5.0).round() as u32 * 5);
+            }
             if let (true, Some(value)) = (output.pressed || output.released, output.pointer) {
                 self.session
                     .set_volume((value * 200.0 / 5.0).round() as u32 * 5);
@@ -1650,4 +1807,26 @@ fn is_audio(source: &str) -> bool {
 
 pub fn is_fullscreen(ctx: &egui::Context) -> bool {
     ctx.input(|i| i.viewport().fullscreen.unwrap_or(false))
+}
+
+/// Where a queue selection points after the row at `removed` goes: rows below it move up one.
+fn selection_after_remove(selected: Option<usize>, removed: usize) -> Option<usize> {
+    match selected? {
+        s if s == removed => None,
+        s if s > removed => Some(s - 1),
+        s => Some(s),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::selection_after_remove;
+
+    #[test]
+    fn selection_follows_its_row_when_another_is_removed() {
+        assert_eq!(selection_after_remove(Some(1), 0), Some(0));
+        assert_eq!(selection_after_remove(Some(1), 2), Some(1));
+        assert_eq!(selection_after_remove(Some(1), 1), None);
+        assert_eq!(selection_after_remove(None, 0), None);
+    }
 }

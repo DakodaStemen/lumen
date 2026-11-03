@@ -39,6 +39,9 @@ pub fn hash_prefix(video_id: &str) -> String {
         .collect()
 }
 
+/// The longest time accepted in a segment: a day.
+const MAX_SECONDS: f64 = 86_400.0;
+
 /// Picks `video_id`'s skippable segments out of a hash-prefix response, in time order.
 pub fn parse_segments(json: &str, video_id: &str) -> Vec<Segment> {
     let Ok(Value::Array(videos)) = serde_json::from_str::<Value>(json) else {
@@ -51,8 +54,12 @@ pub fn parse_segments(json: &str, video_id: &str) -> Vec<Segment> {
         .flatten()
         .filter(|s| s["actionType"].as_str().unwrap_or("skip") == "skip")
         .filter_map(|s| {
-            let start = (s["segment"][0].as_f64()? * 1000.0).round() as i64;
-            let end = (s["segment"][1].as_f64()? * 1000.0).round() as i64;
+            // Times beyond a day are nonsense from the server; bounding them keeps the
+            // arithmetic on segments from overflowing.
+            let ms =
+                |v: &Value| Some((v.as_f64()?.clamp(0.0, MAX_SECONDS) * 1000.0).round() as i64);
+            let start = ms(&s["segment"][0])?;
+            let end = ms(&s["segment"][1])?;
             let category = s["category"].as_str().unwrap_or("sponsor").to_owned();
             (end > start).then_some(Segment {
                 start,
@@ -109,6 +116,13 @@ mod tests {
         assert!(prefix.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(prefix, hash_prefix("jNQXAC9IVRw"));
         assert_ne!(prefix, hash_prefix("dQw4w9WgXcQ"));
+    }
+
+    #[test]
+    fn absurd_times_are_bounded() {
+        let json = r#"[{"videoID": "v", "segments": [{"segment": [-1e300, 1e300]}]}]"#;
+        let found = parse_segments(json, "v");
+        assert_eq!((found[0].start, found[0].end), (0, 86_400_000));
     }
 
     #[test]

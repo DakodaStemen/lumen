@@ -307,6 +307,27 @@ fn unreadable_media_reports_an_error_and_does_not_advance() {
 }
 
 #[test]
+fn an_unreadable_entry_is_skipped_for_the_next() {
+    let Some(fx) = fixture() else { return };
+    let mut s = session();
+    s.add(&[fx.path("missing.mkv"), fx.path("clip.mp4")], true);
+    assert!(wait(&mut s, 8, |s| s.queue.current == Some(1)
+        && s.state() == State::Playing));
+}
+
+#[test]
+fn a_queue_of_unreadable_entries_stops_with_repeat_on() {
+    let Some(fx) = fixture() else { return };
+    let mut s = session();
+    s.queue.repeat = true;
+    s.add(&[fx.path("missing.mkv"), fx.path("gone.mkv")], true);
+    assert!(wait(&mut s, 5, |s| s.queue.current == Some(1)
+        && s.state() == State::Idle));
+    // It stays on the last failure instead of cycling back to the first.
+    assert!(!wait(&mut s, 2, |s| s.queue.current == Some(0)));
+}
+
+#[test]
 fn chapters_are_listed_and_selectable() {
     let Some(fx) = fixture() else { return };
     let mut s = session();

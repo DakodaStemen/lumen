@@ -2,9 +2,11 @@
 //!
 //! Lumen keeps its own profile in its own settings directory.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread::{self, JoinHandle};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -153,29 +155,43 @@ pub struct FileState {
 }
 
 pub struct Store {
-    dir: Option<PathBuf>,
     pub settings: Settings,
     files: BTreeMap<String, FileState>,
+    /// Files saved by this process. Only these are written over what is on disk, so a second
+    /// Lumen window does not erase what the first one remembered.
+    touched: BTreeSet<String>,
+    writer: Option<Writer>,
 }
 
 impl Store {
     /// A store that is never written to disk.
     pub fn in_memory() -> Self {
         Self {
-            dir: None,
             settings: Settings::default(),
             files: BTreeMap::new(),
+            touched: BTreeSet::new(),
+            writer: None,
         }
     }
 
-    /// Opens the profile in `dir`, starting empty when files are missing or unreadable.
+    /// Opens the profile in `dir`. Unreadable entries are skipped; a file that cannot be read
+    /// at all is kept beside it as `*.broken` instead of being overwritten by the next save.
     pub fn open(dir: PathBuf) -> Self {
-        let settings = read_json(&dir.join("settings.json")).unwrap_or_default();
-        let files = read_json(&dir.join("files.json")).unwrap_or_default();
+        let mut settings: Settings = load_lenient(&dir.join("settings.json"));
+        settings.volume = settings.volume.min(MAX_VOLUME);
+        let files = load_files(&dir.join("files.json"));
         Self {
-            dir: Some(dir),
             settings,
             files,
+            touched: BTreeSet::new(),
+            writer: Some(Writer::spawn(dir)),
+        }
+    }
+
+    /// Waits until everything saved so far is on disk.
+    pub fn flush(&self) {
+        if let Some(writer) = &self.writer {
+            writer.flush();
         }
     }
 
@@ -200,16 +216,26 @@ impl Store {
 
     pub fn save_file_state(&mut self, source: &str, mut state: FileState) {
         state.saved = self.files.values().map(|f| f.saved).max().unwrap_or(0) + 1;
-        self.files.insert(Self::file_key(source), state);
+        let key = Self::file_key(source);
+        self.files.insert(key.clone(), state);
         evict_oldest(&mut self.files, FILES_LIMIT);
-        if let Some(dir) = &self.dir {
-            write_json(&dir.join("files.json"), &self.files);
+        self.touched.insert(key);
+        self.touched.retain(|k| self.files.contains_key(k));
+        if let Some(writer) = &self.writer {
+            let touched = self
+                .touched
+                .iter()
+                .filter_map(|k| Some((k.clone(), self.files.get(k)?.clone())))
+                .collect();
+            writer.send(Job::Files(touched));
         }
     }
 
+    /// Saves the settings on the writer thread; repeated saves in quick succession (a volume
+    /// drag, say) collapse into one write.
     pub fn save_settings(&self) {
-        if let Some(dir) = &self.dir {
-            write_json(&dir.join("settings.json"), &self.settings);
+        if let Some(writer) = &self.writer {
+            writer.send(Job::Settings(Box::new(self.settings.clone())));
         }
     }
 
@@ -222,17 +248,25 @@ impl Store {
     }
 }
 
-/// Drops userinfo, query and fragment from network URLs so secrets never reach
-/// settings.json. Local paths and other strings are returned unchanged.
+/// Drops userinfo, query and fragment from URLs of any scheme except `file://` (`srt://`,
+/// `ftp://` and `smb://` carry passwords too) so secrets never reach settings.json. Local paths
+/// and other strings are returned unchanged.
 fn redact_source(source: &str) -> String {
-    let lower = source.to_ascii_lowercase();
-    let network = [
-        "http://", "https://", "rtsp://", "rtsps://", "rtmp://", "rtmps://",
-    ];
-    let Some(scheme) = network.iter().find(|s| lower.starts_with(**s)) else {
+    let Some(at) = source.find("://") else {
         return source.to_owned();
     };
-    let (head, rest) = source.split_at(scheme.len());
+    let scheme = &source[..at];
+    let is_scheme = scheme
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if !is_scheme || scheme.eq_ignore_ascii_case("file") {
+        return source.to_owned();
+    }
+    let (head, rest) = source.split_at(at + 3);
     let end = rest.find(['?', '#']).unwrap_or(rest.len());
     let rest = &rest[..end];
     let (authority, path) = match rest.find('/') {
@@ -255,8 +289,193 @@ fn evict_oldest(files: &mut BTreeMap<String, FileState>, limit: usize) {
     }
 }
 
-fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
-    serde_json::from_slice(&fs::read(path).ok()?).ok()
+/// The highest volume Lumen sets (percent).
+pub const MAX_VOLUME: u32 = 200;
+
+/// Reads `path` as JSON. A missing file is `None`; a file that is not JSON is set aside as
+/// `<name>.broken` (so the next save cannot destroy what may be recoverable) and is also `None`.
+fn read_value(path: &Path) -> Option<serde_json::Value> {
+    let bytes = fs::read(path).ok()?;
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => Some(value),
+        Err(e) => {
+            set_aside(path, &e.to_string());
+            None
+        }
+    }
+}
+
+fn set_aside(path: &Path, why: &str) {
+    let mut broken = path.as_os_str().to_owned();
+    broken.push(".broken");
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    eprintln!("lumen: {name} could not be read ({why}); kept as {name}.broken");
+    let _ = fs::rename(path, broken);
+}
+
+/// Loads a settings-like struct field by field: a field with the wrong type falls back to its
+/// default instead of discarding every other setting.
+fn load_lenient<T: Default + Serialize + serde::de::DeserializeOwned>(path: &Path) -> T {
+    let Some(value) = read_value(path) else {
+        return T::default();
+    };
+    if let Ok(parsed) = serde_json::from_value::<T>(value.clone()) {
+        return parsed;
+    }
+    let serde_json::Value::Object(stored) = value else {
+        set_aside(path, "not a JSON object");
+        return T::default();
+    };
+    let Ok(serde_json::Value::Object(mut merged)) = serde_json::to_value(T::default()) else {
+        return T::default();
+    };
+    for (key, field) in stored {
+        let previous = merged.insert(key.clone(), field);
+        if serde_json::from_value::<T>(serde_json::Value::Object(merged.clone())).is_err() {
+            match previous {
+                Some(previous) => merged.insert(key, previous),
+                None => merged.remove(&key),
+            };
+        }
+    }
+    serde_json::from_value(serde_json::Value::Object(merged)).unwrap_or_default()
+}
+
+/// Loads `files.json`, skipping any entry that does not parse.
+fn load_files(path: &Path) -> BTreeMap<String, FileState> {
+    match read_value(path) {
+        Some(serde_json::Value::Object(entries)) => entries
+            .into_iter()
+            .filter_map(|(k, v)| Some((k, serde_json::from_value(v).ok()?)))
+            .collect(),
+        Some(_) => {
+            set_aside(path, "not a JSON object");
+            BTreeMap::new()
+        }
+        None => BTreeMap::new(),
+    }
+}
+
+enum Job {
+    Settings(Box<Settings>),
+    /// Every entry this process has saved, to lay over what is on disk.
+    Files(BTreeMap<String, FileState>),
+    Flush(Sender<()>),
+}
+
+/// Writes the profile off the UI thread, in order, collapsing a burst of saves into one write.
+struct Writer {
+    jobs: Option<Sender<Job>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Writer {
+    fn spawn(dir: PathBuf) -> Self {
+        let (jobs, rx) = mpsc::channel();
+        let thread = thread::Builder::new()
+            .name("profile-writer".into())
+            .spawn(move || write_jobs(&dir, &rx))
+            .ok();
+        Self {
+            jobs: Some(jobs),
+            thread,
+        }
+    }
+
+    fn send(&self, job: Job) {
+        if let Some(jobs) = &self.jobs {
+            let _ = jobs.send(job);
+        }
+    }
+
+    fn flush(&self) {
+        let (done, wait) = mpsc::channel();
+        self.send(Job::Flush(done));
+        let _ = wait.recv();
+    }
+}
+
+impl Drop for Writer {
+    /// Everything saved reaches the disk before Lumen exits.
+    fn drop(&mut self) {
+        self.jobs = None;
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn write_jobs(dir: &Path, jobs: &Receiver<Job>) {
+    while let Ok(first) = jobs.recv() {
+        let (mut settings, mut files, mut flushed) = (None, None, Vec::new());
+        for job in std::iter::once(first).chain(jobs.try_iter()) {
+            match job {
+                Job::Settings(s) => settings = Some(s),
+                Job::Files(f) => files = Some(f),
+                Job::Flush(done) => flushed.push(done),
+            }
+        }
+        if let Some(settings) = settings {
+            write_json(&dir.join("settings.json"), &settings, true);
+        }
+        if let Some(touched) = files {
+            merge_files(dir, touched);
+        }
+        for done in flushed {
+            let _ = done.send(());
+        }
+    }
+}
+
+/// Lays this process's entries over the current `files.json` and writes the result, holding
+/// the profile lock so two Lumen windows never interleave a read and a write.
+fn merge_files(dir: &Path, touched: BTreeMap<String, FileState>) {
+    create_private_dir(dir);
+    let _lock = ProfileLock::take(dir);
+    let path = dir.join("files.json");
+    let mut files = load_files(&path);
+    let newest = files.values().map(|f| f.saved).max().unwrap_or(0);
+    let mut order: Vec<_> = touched.into_iter().collect();
+    order.sort_by_key(|(_, state)| state.saved);
+    for (n, (key, mut state)) in (1..).zip(order) {
+        // Ours were saved after anything another window wrote before this merge.
+        state.saved = newest + n;
+        files.insert(key, state);
+    }
+    evict_oldest(&mut files, FILES_LIMIT);
+    write_json(&path, &files, false);
+}
+
+/// An advisory lock on the profile folder, released when dropped. Unix only; elsewhere the
+/// merge still keeps another window's entries but two writes can race.
+struct ProfileLock {
+    #[cfg(unix)]
+    _file: Option<fs::File>,
+}
+
+impl ProfileLock {
+    fn take(dir: &Path) -> Self {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            use std::os::unix::io::AsRawFd;
+            let file = fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .mode(0o600)
+                .open(dir.join(".lock"))
+                .ok()
+                // SAFETY: flock on a descriptor this function owns; it is released on close.
+                .filter(|f| unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } == 0);
+            Self { _file: file }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = dir;
+            Self {}
+        }
+    }
 }
 
 /// Creates `dir` (0700 on Unix) and tightens it to 0700 if it already exists with looser
@@ -284,9 +503,14 @@ fn create_private_dir(dir: &Path) {
 /// fsynced before the rename, so a crash never leaves half a profile and a planted
 /// `settings.json.tmp` symlink cannot redirect the write. The rename replaces `path` itself,
 /// never a file a symlink there points at.
-fn write_json<T: Serialize>(path: &Path, value: &T) {
+fn write_json<T: Serialize>(path: &Path, value: &T, pretty: bool) {
     use std::io::Write;
-    let Ok(bytes) = serde_json::to_vec_pretty(value) else {
+    let bytes = if pretty {
+        serde_json::to_vec_pretty(value)
+    } else {
+        serde_json::to_vec(value)
+    };
+    let Ok(bytes) = bytes else {
         return;
     };
     let Some(parent) = path.parent() else {
@@ -326,6 +550,7 @@ mod tests {
         store.save_file_state("/a.mkv", state.clone());
         store.settings.volume = 120;
         store.remember_recent("/a.mkv");
+        store.flush();
 
         let reopened = Store::open(dir.path().to_path_buf());
         assert_eq!(reopened.file_state("/a.mkv"), state);
@@ -356,6 +581,76 @@ mod tests {
         fs::write(dir.path().join("files.json"), "[]").unwrap();
         let store = Store::open(dir.path().to_path_buf());
         assert_eq!(store.settings.volume, 80);
+        // The unreadable file is kept for the user rather than overwritten.
+        assert_eq!(
+            fs::read_to_string(dir.path().join("settings.json.broken")).unwrap(),
+            "{ not json"
+        );
+    }
+
+    #[test]
+    fn one_bad_setting_keeps_the_others() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("settings.json"),
+            r#"{"volume": 55, "seek_step": "ten", "resume": false}"#,
+        )
+        .unwrap();
+        let store = Store::open(dir.path().to_path_buf());
+        assert_eq!(store.settings.volume, 55);
+        assert!(!store.settings.resume);
+        assert_eq!(store.settings.seek_step, Settings::default().seek_step);
+    }
+
+    #[test]
+    fn a_stored_volume_out_of_range_is_clamped() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("settings.json"),
+            r#"{"volume": 4294967295}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Store::open(dir.path().to_path_buf()).settings.volume,
+            MAX_VOLUME
+        );
+    }
+
+    #[test]
+    fn one_bad_file_entry_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let (good, bad) = (Store::file_key("/good.mkv"), Store::file_key("/bad.mkv"));
+        fs::write(
+            dir.path().join("files.json"),
+            format!(r#"{{"{good}": {{"position": 7}}, "{bad}": {{"position": "x"}}}}"#),
+        )
+        .unwrap();
+        let mut store = Store::open(dir.path().to_path_buf());
+        assert_eq!(store.file_state("/good.mkv").position, 7);
+        store.save_file_state("/new.mkv", FileState::default());
+        store.flush();
+        let reopened = Store::open(dir.path().to_path_buf());
+        assert_eq!(reopened.file_state("/good.mkv").position, 7);
+    }
+
+    #[test]
+    fn two_windows_keep_each_others_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut first = Store::open(dir.path().to_path_buf());
+        let mut second = Store::open(dir.path().to_path_buf());
+        let at = |position| FileState {
+            position,
+            ..Default::default()
+        };
+        first.save_file_state("/a.mkv", at(1_000));
+        first.flush();
+        second.save_file_state("/b.mkv", at(2_000));
+        second.flush();
+        first.save_file_state("/a.mkv", at(3_000));
+        first.flush();
+        let reopened = Store::open(dir.path().to_path_buf());
+        assert_eq!(reopened.file_state("/a.mkv").position, 3_000);
+        assert_eq!(reopened.file_state("/b.mkv").position, 2_000);
     }
 
     #[test]
@@ -364,9 +659,15 @@ mod tests {
         store.remember_recent("rtsp://user:pass@cam.local:554/live?token=abc#x");
         store.remember_recent("https://u:p@example.com/v.mp4?sig=SECRET");
         store.remember_recent("/home/me/a.mkv?keep");
+        store.remember_recent("srt://cam.local:9000?passphrase=hunter22");
+        store.remember_recent("ftp://me:pw@files.local/a.mkv");
+        store.remember_recent("file:///home/me/b.mkv?keep");
         assert_eq!(
             store.settings.recent,
             [
+                "file:///home/me/b.mkv?keep",
+                "ftp://files.local/a.mkv",
+                "srt://cam.local:9000",
                 "/home/me/a.mkv?keep",
                 "https://example.com/v.mp4",
                 "rtsp://cam.local:554/live"
@@ -383,6 +684,7 @@ mod tests {
         let mut store = Store::open(dir.clone());
         store.save_file_state("/a", FileState::default());
         store.save_settings();
+        store.flush();
         let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&dir.join("settings.json")), 0o600);
         assert_eq!(mode(&dir.join("files.json")), 0o600);
@@ -403,6 +705,7 @@ mod tests {
         let mut store = Store::open(profile.clone());
         store.settings.volume = 42;
         store.save_settings();
+        store.flush();
         assert_eq!(fs::read_to_string(&victim).unwrap(), "untouched");
         let saved = fs::symlink_metadata(profile.join("settings.json")).unwrap();
         assert!(saved.is_file(), "the link is replaced by a real file");

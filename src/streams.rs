@@ -431,7 +431,49 @@ struct Proc {
     stderr: Box<dyn Read + Send>,
 }
 
+/// A Streamlink command that ignores the user's and the system's config files, as yt-dlp's
+/// `--ignore-config` does: a config could add `--record`, a proxy or a player of its own.
+/// `--no-config` is only passed to a Streamlink that accepts it (6.6 and later); the check runs
+/// once per program, on the job thread.
+fn streamlink_command(streamlink: &PathBuf) -> Command {
+    static SUPPORTED: Mutex<Option<std::collections::HashMap<PathBuf, bool>>> = Mutex::new(None);
+    let supported = *SUPPORTED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .entry(streamlink.clone())
+        .or_insert_with(|| {
+            Command::new(streamlink)
+                .args(["--no-config", "--version"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        });
+    let mut command = Command::new(streamlink);
+    if supported {
+        command.arg("--no-config");
+    }
+    command
+}
+
 fn spawn(job: &Job, command: &mut Command) -> io::Result<Proc> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        // If Lumen dies without cleaning up (a crash, or the forced exit after a stuck close),
+        // the kernel ends its helpers too, so no Streamlink relay is left listening. The signal
+        // follows the spawning thread, which always outlives its child here: each job thread
+        // waits for or kills what it starts before finishing.
+        // SAFETY: prctl is async-signal-safe and touches no memory of the parent.
+        unsafe {
+            command.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
+    }
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -439,8 +481,18 @@ fn spawn(job: &Job, command: &mut Command) -> io::Result<Proc> {
         .spawn()?;
     let stdout = Box::new(child.stdout.take().expect("stdout is piped"));
     let stderr = Box::new(child.stderr.take().expect("stderr is piped"));
+    // `Job::kill` marks the job cancelled and then drains `children` under this lock, so checking
+    // the flag while holding it means a child is either drained by `kill` or killed here.
+    let mut children = job.children.lock().unwrap();
+    if job.cancelled() {
+        drop(children);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::new(io::ErrorKind::Interrupted, "job cancelled"));
+    }
     let child = Arc::new(Mutex::new(child));
-    job.children.lock().unwrap().push(child.clone());
+    children.push(child.clone());
+    drop(children);
     Ok(Proc {
         child,
         stdout,
@@ -557,7 +609,7 @@ impl Pipeline {
     /// Asks Streamlink whether a site plugin matches. Never touches the network.
     /// Runs as part of the job, so replacing the job stops it.
     fn can_handle(&self, streamlink: &PathBuf) -> bool {
-        let mut command = Command::new(streamlink);
+        let mut command = streamlink_command(streamlink);
         // The `=` form binds the page to the option, so a page can never be read as a flag.
         // (This option takes its value directly, so `--` cannot be used as with the others.)
         command.arg(format!("--can-handle-url-no-redirect={}", self.page));
@@ -584,7 +636,7 @@ impl Pipeline {
         } else {
             format!("{},best", self.quality)
         };
-        let mut command = Command::new(streamlink);
+        let mut command = streamlink_command(streamlink);
         command.args([
             "--player-external-http",
             "--player-external-http-interface",
@@ -634,7 +686,7 @@ impl Pipeline {
 
     /// Fetches the title and quality list alongside the relay, so it never delays playback.
     fn probe(&self, streamlink: &PathBuf) {
-        let mut command = Command::new(streamlink);
+        let mut command = streamlink_command(streamlink);
         command.args(["--json", "--", &self.page]);
         let Ok(proc) = spawn(&self.job, &mut command) else {
             return;

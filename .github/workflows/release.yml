@@ -13,11 +13,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: 1.99.1
-      - run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libmpv-dev libfuse2 patchelf
+      - run: sudo apt-get update && sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libgl1-mesa-dev libmpv-dev libfuse2 patchelf ffmpeg streamlink
+      - name: Test before packaging
+        run: cargo test --locked
       - run: cargo install cargo-packager cargo-generate-rpm --locked
       - run: cargo packager --release --formats deb,appimage
       - run: cargo build --release --locked && cargo generate-rpm
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux
           path: |
@@ -38,7 +40,7 @@ jobs:
         run: |
           flatpak install --user -y --bundle dist-lumen.flatpak
           flatpak run --command=lumen-rs io.github.DakodaStemen.Lumen --version | grep -q lumen-rs
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: flatpak
           path: dist-lumen.flatpak
@@ -78,7 +80,7 @@ jobs:
           ls /tmp/lumen-dmg/*.app/Contents/Frameworks | grep -q libmpv
           if otool -L /tmp/lumen-dmg/*.app/Contents/MacOS/lumen-rs | grep -E '/opt/homebrew|/usr/local'; then echo "links Homebrew path"; exit 1; fi
           hdiutil detach /tmp/lumen-dmg
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos-${{ matrix.arch }}
           path: dist/Lumen-${{ matrix.arch }}.dmg
@@ -119,9 +121,26 @@ jobs:
           Start-Process msiexec -ArgumentList "/a `"$msi`" /qn TARGETDIR=$env:RUNNER_TEMP\\msi" -Wait
           Get-ChildItem $env:RUNNER_TEMP/msi -Recurse -File | ForEach-Object { "$($_.Length) $($_.FullName)" }
           if (-not (Get-ChildItem $env:RUNNER_TEMP/msi -Recurse -Filter libmpv-2.dll)) { throw "libmpv-2.dll missing from MSI" }
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows
           path: |
             dist/*.zip
             dist/*.msi
+  checksums:
+    needs: [linux, flatpak, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: SHA-256 sums
+        run: |
+          cd artifacts
+          find . -type f ! -name SHA256SUMS -printf '%P\n' | sort | xargs -d '\n' sha256sum > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: checksums
+          path: artifacts/SHA256SUMS

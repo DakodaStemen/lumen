@@ -69,10 +69,13 @@ pub struct Binding {
 impl Binding {
     /// Parses text such as `Space`, `Shift+Right` or `Ctrl+Shift+S`.
     pub fn parse(text: &str) -> Option<Binding> {
-        let (mods, key) = match text.trim().rsplit_once('+') {
+        let text = text.trim();
+        let (mods, key) = match text.rsplit_once('+') {
             Some((mods, key)) if !key.is_empty() => (mods, key),
+            // "Ctrl++": the last "+" is the key, the one before it joins the modifiers.
+            _ if text.len() > 1 && text.ends_with("++") => (&text[..text.len() - 2], "+"),
             // A lone "+" is the key itself.
-            _ => ("", text.trim()),
+            _ => ("", text),
         };
         let mut modifiers = Modifiers::NONE;
         for word in mods.split('+').filter(|w| !w.is_empty()) {
@@ -280,6 +283,13 @@ mod tests {
         assert_eq!(Binding::parse("Shift+Right").unwrap().key, Key::ArrowRight);
         assert_eq!(Binding::parse("PgDown").unwrap().key, Key::PageDown);
         assert!(Binding::parse("Hyper+X").is_none());
+        let plus = Binding::parse("Ctrl++").unwrap();
+        assert!(plus.modifiers.ctrl);
+        assert_eq!(
+            Binding::format(plus.key, plus.modifiers).as_deref(),
+            Some("Ctrl++")
+        );
+        assert!(!Binding::parse("+").unwrap().modifiers.ctrl);
         assert!(Binding::parse("").is_none());
     }
 
