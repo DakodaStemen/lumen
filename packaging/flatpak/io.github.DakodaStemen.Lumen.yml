@@ -89,7 +89,16 @@ modules:
       - install -Dm755 target/release/lumen-rs /app/bin/lumen-rs
       - install -Dm644 packaging/linux/lumen-rs.desktop /app/share/applications/io.github.DakodaStemen.Lumen.desktop
       - install -Dm644 packaging/linux/lumen-rs.metainfo.xml /app/share/metainfo/io.github.DakodaStemen.Lumen.metainfo.xml
-      - install -Dm644 assets/icon.png /app/share/icons/hicolor/256x256/apps/io.github.DakodaStemen.Lumen.png
+      - install -Dm644 packaging/icons/linux/hicolor/16x16/apps/lumen-rs.png /app/share/icons/hicolor/16x16/apps/io.github.DakodaStemen.Lumen.png
+      - install -Dm644 packaging/icons/linux/hicolor/22x22/apps/lumen-rs.png /app/share/icons/hicolor/22x22/apps/io.github.DakodaStemen.Lumen.png
+      - install -Dm644 packaging/icons/linux/hicolor/24x24/apps/lumen-rs.png /app/share/icons/hicolor/24x24/apps/io.github.DakodaStemen.Lumen.png
+      - install -Dm644 packaging/icons/linux/hicolor/32x32/apps/lumen-rs.png /app/share/icons/hicolor/32x32/apps/io.github.DakodaStemen.Lumen.png
+      - install -Dm644 packaging/icons/linux/hicolor/48x48/apps/lumen-rs.png /app/share/icons/hicolor/48x48/apps/io.github.DakodaStemen.Lumen.png
+      - install -Dm644 packaging/icons/linux/hicolor/64x64/apps/lumen-rs.png /app/share/icons/hicolor/64x64/apps/io.github.DakodaStemen.Lumen.png
+      - install -Dm644 packaging/icons/linux/hicolor/128x128/apps/lumen-rs.png /app/share/icons/hicolor/128x128/apps/io.github.DakodaStemen.Lumen.png
+      - install -Dm644 packaging/icons/linux/hicolor/256x256/apps/lumen-rs.png /app/share/icons/hicolor/256x256/apps/io.github.DakodaStemen.Lumen.png
+      - install -Dm644 packaging/icons/linux/hicolor/512x512/apps/lumen-rs.png /app/share/icons/hicolor/512x512/apps/io.github.DakodaStemen.Lumen.png
+      - install -Dm644 packaging/icons/linux/hicolor/scalable/apps/lumen-rs.svg /app/share/icons/hicolor/scalable/apps/io.github.DakodaStemen.Lumen.svg
       - desktop-file-edit --set-icon=io.github.DakodaStemen.Lumen --set-key=StartupWMClass --set-value=io.github.DakodaStemen.Lumen /app/share/applications/io.github.DakodaStemen.Lumen.desktop || sed -i -e "s/^Icon=.*/Icon=io.github.DakodaStemen.Lumen/" -e "s/^StartupWMClass=.*/StartupWMClass=io.github.DakodaStemen.Lumen/" /app/share/applications/io.github.DakodaStemen.Lumen.desktop
     sources:
       - type: dir
