@@ -130,7 +130,7 @@ fn dialog(start_dir: &str) -> rfd::FileDialog {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

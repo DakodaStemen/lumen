@@ -2251,14 +2251,14 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/libmpv2/libmpv2-6.0.0.crate",
-        "sha256": "3f3d44c1c29b866d44453249d1d8b2822d891fdabd08359a5b85bb6944445e70",
-        "dest": "cargo/vendor/libmpv2-6.0.0"
+        "url": "https://static.crates.io/crates/libmpv2/libmpv2-6.0.1.crate",
+        "sha256": "a8d04f1b5e14cd038b2d64bde8b4ca71006c45670790f50344b6ced4337c5d7c",
+        "dest": "cargo/vendor/libmpv2-6.0.1"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"3f3d44c1c29b866d44453249d1d8b2822d891fdabd08359a5b85bb6944445e70\", \"files\": {}}",
-        "dest": "cargo/vendor/libmpv2-6.0.0",
+        "contents": "{\"package\": \"a8d04f1b5e14cd038b2d64bde8b4ca71006c45670790f50344b6ced4337c5d7c\", \"files\": {}}",
+        "dest": "cargo/vendor/libmpv2-6.0.1",
         "dest-filename": ".cargo-checksum.json"
     },
     {
