@@ -33,6 +33,8 @@ materials for LGPL components. Upstream links alone are not a complete source
 offer. The workflows do not currently capture all these materials; this is an
 explicit release-maintainer gate, not a claim that existing bundles comply.
 
+Icons: masters in `assets/brand/`, generated sets in `packaging/icons/` (see `docs/brand.md`). `scripts/install.sh` does a per-user Linux install of the binary, all hicolor sizes and the launcher. The app id is `lumen-rs` natively (`.desktop` id, `StartupWMClass`, Wayland app_id) and the Flatpak id inside the Flatpak (read from `FLATPAK_ID`).
+
 Everything is built by `.github/workflows/release.yml` (manual run, or a `v*` tag). The Linux job runs the
 tests first, and a final job publishes `SHA256SUMS` for every artifact. Nothing is attached to a
 GitHub Release automatically; that stays a manual step. Local builds:
