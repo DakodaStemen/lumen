@@ -41,6 +41,16 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
 
+  check-all:
+    # Branch protection requires a single 'check' status; the matrix job reports one per OS.
+    name: check
+    if: always()
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - name: All matrix legs passed
+        run: test "${{ needs.check.result }}" = success
+
   msrv:
     runs-on: ubuntu-latest
     steps:
