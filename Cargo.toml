@@ -44,7 +44,7 @@ identifier = "io.github.DakodaStemen.Lumen"
 publisher = "DakodaStemen"
 category = "Video"
 long-description = "A native media player built on libmpv. Every format. Every frame."
-icons = ["assets/icon-32.png", "assets/icon-64.png", "assets/icon.png"]
+icons = ["packaging/icons/linux/hicolor/*/apps/lumen-rs.png", "packaging/icons/macos/lumen-rs.icns", "packaging/icons/windows/lumen-rs.ico"]
 license-file = "LICENSE"
 before-packaging-command = "cargo build --release --locked"
 out-dir = "dist"
@@ -69,7 +69,16 @@ minimum-system-version = "11.0"
 assets = [
   { source = "target/release/lumen-rs", dest = "/usr/bin/lumen-rs", mode = "755" },
   { source = "packaging/linux/lumen-rs.desktop", dest = "/usr/share/applications/lumen-rs.desktop", mode = "644" },
-  { source = "assets/icon.png", dest = "/usr/share/icons/hicolor/256x256/apps/lumen-rs.png", mode = "644" },
+  { source = "packaging/icons/linux/hicolor/16x16/apps/lumen-rs.png", dest = "/usr/share/icons/hicolor/16x16/apps/lumen-rs.png", mode = "644" },
+  { source = "packaging/icons/linux/hicolor/22x22/apps/lumen-rs.png", dest = "/usr/share/icons/hicolor/22x22/apps/lumen-rs.png", mode = "644" },
+  { source = "packaging/icons/linux/hicolor/24x24/apps/lumen-rs.png", dest = "/usr/share/icons/hicolor/24x24/apps/lumen-rs.png", mode = "644" },
+  { source = "packaging/icons/linux/hicolor/32x32/apps/lumen-rs.png", dest = "/usr/share/icons/hicolor/32x32/apps/lumen-rs.png", mode = "644" },
+  { source = "packaging/icons/linux/hicolor/48x48/apps/lumen-rs.png", dest = "/usr/share/icons/hicolor/48x48/apps/lumen-rs.png", mode = "644" },
+  { source = "packaging/icons/linux/hicolor/64x64/apps/lumen-rs.png", dest = "/usr/share/icons/hicolor/64x64/apps/lumen-rs.png", mode = "644" },
+  { source = "packaging/icons/linux/hicolor/128x128/apps/lumen-rs.png", dest = "/usr/share/icons/hicolor/128x128/apps/lumen-rs.png", mode = "644" },
+  { source = "packaging/icons/linux/hicolor/256x256/apps/lumen-rs.png", dest = "/usr/share/icons/hicolor/256x256/apps/lumen-rs.png", mode = "644" },
+  { source = "packaging/icons/linux/hicolor/512x512/apps/lumen-rs.png", dest = "/usr/share/icons/hicolor/512x512/apps/lumen-rs.png", mode = "644" },
+  { source = "packaging/icons/linux/hicolor/scalable/apps/lumen-rs.svg", dest = "/usr/share/icons/hicolor/scalable/apps/lumen-rs.svg", mode = "644" },
   { source = "LICENSE", dest = "/usr/share/licenses/lumen-rs/LICENSE", mode = "644" },
 ]
 [package.metadata.generate-rpm.requires]

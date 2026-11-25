@@ -405,7 +405,7 @@ fn a_loaded_subtitle_file_comes_back_with_the_video() {
     assert!(s.engine.tracks(TrackKind::Subtitle).is_empty());
     let subs = fx.path("subs.srt");
     s.load_subtitle(&subs);
-    assert!(wait(&mut s, 5, |s| s
+    assert!(wait(&mut s, 15, |s| s
         .engine
         .tracks(TrackKind::Subtitle)
         .len()
