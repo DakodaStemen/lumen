@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="lumen_accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+  </defs><g transform="translate(29.6, 0)">
+  <!-- Bold Play Triangle normalized to 276px footprint, shifted for optical center -->
+  <path d="M 152 144 C 138 134 126 140 126 158 L 126 354 C 126 372 138 378 152 368 L 344 268 C 358 260 358 248 344 240 Z" fill="url(#lumen_accent)"/>
+  <!-- Standardized white cursor pill nestled in center core -->
+  <rect x="214" y="208" width="40" height="96" rx="14" fill="#ffffff"/>
+</g></svg>

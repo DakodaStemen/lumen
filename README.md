@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/brand/icon.svg" alt="Lumen" width="128" height="128"></p>
+
 ```text
  _
 | |   _   _ _ __ ___   ___ _ __

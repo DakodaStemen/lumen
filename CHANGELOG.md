@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- New app icon: a rounded play triangle with a cursor pill on a green tile, with a simpler master for
+  16 to 32 px. It is used for the window icon, the Linux hicolor theme (16 to 512 px plus scalable SVG,
+  in the `.desktop` launcher, deb, rpm and Flatpak), the Windows `.ico` and the macOS `.icns`.
+  Masters are in `assets/brand/`, generated files in `packaging/icons/` (`scripts/gen-icons.py`).
+  `scripts/install.sh` installs the binary, icons and launcher for the current user.
 - Fixes from an audit of the whole repository:
   - Queue: removing a row from its context menu no longer leaves the selection on the wrong row.
     A file that will not open is skipped for the next one (it stops when every entry has failed,
