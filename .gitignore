@@ -1,3 +1,7 @@
 /target/
 /dist/
 /vendor/
+.env
+.env.*
+*.pem
+*.key

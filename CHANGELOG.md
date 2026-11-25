@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Engineering baseline (2026-11-03): `Makefile` (`help setup lint fmt test build ci`), `SECURITY.md`,
+  PR and issue templates, `.editorconfig`, `.gitattributes`, markdownlint config, pre-commit config,
+  `docs/adr/` with ADR-0001, a markdown lint job, job timeouts and concurrency in CI, and a
+  Dependabot cooldown. No product code changes.
+
 - New app icon: a rounded play triangle with a cursor pill on a green tile, with a simpler master for
   16 to 32 px. It is used for the window icon, the Linux hicolor theme (16 to 512 px plus scalable SVG,
   in the `.desktop` launcher, deb, rpm and Flatpak), the Windows `.ico` and the macOS `.icns`.
