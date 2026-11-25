@@ -601,7 +601,7 @@ fn main() -> Result<()> {
             .with_resizable(false)
             .with_title("Lumen")
             .with_icon(eframe::icon_data::from_png_bytes(include_bytes!(
-                "../assets/icon.png"
+                "../packaging/icons/window-icon-256.png"
             ))?),
         ..Default::default()
     };
